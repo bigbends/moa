@@ -39,11 +39,13 @@ test('account boundaries, legacy claim, avatars, profile limits and admin routes
     const creates = await Promise.all(Array.from({ length: 5 }, () => create(null)));
     assert.equal(creates.filter(r => r.statusCode === 201).length, 4);
     assert.deepEqual(creates.find(r => r.statusCode === 409)!.json(), { error: 'profile-limit' });
+    assert.equal((await app.inject({ url: '/api/admin/remote-access', headers: admin })).json().available, false);
     const adminRoutes = [
       ['GET','/api/network'], ['PATCH','/api/network'], ['POST','/api/network/test'],
       ['GET','/api/source-repositories'], ['DELETE','/api/source-repositories'], ['POST','/api/sources/refresh'],
       ['POST','/api/sources/x/install'], ['POST','/api/sources/x/rollback'], ['POST','/api/sources/x/check'],
       ['PATCH','/api/sources/x'], ['GET','/api/sources/x/preferences'], ['PATCH','/api/sources/x/preferences'],
+      ['GET','/api/admin/remote-access'], ['POST','/api/admin/remote-access/start'], ['POST','/api/admin/remote-access/stop'], ['POST','/api/admin/remote-access/configure'],
       ['GET','/api/library/folders'], ['POST','/api/library/folders'], ['DELETE','/api/library/folders/x'],
       ['GET','/api/library/browse'], ['POST','/api/library/scan'], ['GET','/api/library/status'],
       ['PATCH','/api/media/x/metadata'], ['DELETE','/api/episodes/x/subtitles/y'], ['DELETE','/api/admin/accounts/admin-id/data'],

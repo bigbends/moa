@@ -1,0 +1,11 @@
+MOA connector controller is part of MOA, GPL-3.0-or-later.
+Source: https://github.com/sidetool/moa (services/connector).
+
+Unmodified cloudflared 2026.3.0, Cloudflare and contributors, Apache-2.0.
+Source: https://github.com/cloudflare/cloudflared/tree/2026.3.0
+Unmodified Tailscale 1.102.5, Tailscale Inc & contributors, BSD-3-Clause.
+Source: https://github.com/tailscale/tailscale/tree/v1.102.5
+Their license texts accompany this image in /app/licenses.
+Upstream binaries include additional Go dependencies; preserve the upstream
+release's dependency notices when redistributing these binaries.
+The image digests in Dockerfile identify the exact binary sources.

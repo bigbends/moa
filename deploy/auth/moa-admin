@@ -1,0 +1,30 @@
+#!/usr/bin/env node
+import { createInterface } from 'node:readline/promises';
+import { Writable } from 'node:stream';
+import { randomBytes } from 'node:crypto';
+import { openState } from './state.mjs';
+import { passwordHash, passwordValid, transaction } from './accounts.mjs';
+if (process.argv[2] !== 'reset-password' || process.argv.length !== 3 || !process.stdin.isTTY) {
+  console.error('Usage (interactive terminal): moa-admin reset-password'); process.exit(1);
+}
+let muted = false;
+const output = new Writable({ write(chunk, encoding, done) { if (!muted) process.stdout.write(chunk, encoding); done(); } });
+const prompt = createInterface({ input: process.stdin, output, terminal: true });
+const { database } = openState();
+try {
+  const username = (await prompt.question('Admin username: ')).trim();
+  process.stdout.write('New password: '); muted = true;
+  const password = await prompt.question('');
+  process.stdout.write('\nConfirm password: ');
+  const confirm = await prompt.question(''); muted = false; process.stdout.write('\n');
+  if (!passwordValid(password) || password !== confirm) throw new Error('Passwords must match and contain 8–1024 characters.');
+  const salt = randomBytes(30).toString('hex'), hash = await passwordHash(password, salt);
+  transaction(database, () => {
+    const user = database.prepare("SELECT id FROM accounts WHERE username=? AND role='admin'").get(username);
+    if (!user) throw new Error('Administrator not found.');
+    database.prepare('UPDATE accounts SET salt=?,hash=?,disabled=0 WHERE id=?').run(salt, hash, user.id);
+    database.prepare('DELETE FROM sessions WHERE account_id=?').run(user.id);
+  });
+  console.log('Password reset; existing sessions revoked.');
+} catch (error) { console.error(error.message); process.exitCode = 1; }
+finally { prompt.close(); database.close(); }

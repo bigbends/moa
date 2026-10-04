@@ -1,4 +1,4 @@
-import { randomUUID, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { randomUUID, randomBytes, createHash, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 const derive = promisify(scrypt);
 export const passwordHash = async (password, salt) => (await derive(password, Buffer.from(salt, 'hex'), 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 })).toString('hex');
@@ -38,7 +38,7 @@ export function migrateAccounts(db, credentials, now) {
 export function accountsService(db, origin, now) {
   const get = id => db.prepare('SELECT * FROM accounts WHERE id=?').get(id);
   const invalidate = id => db.prepare('DELETE FROM sessions WHERE account_id=?').run(id);
-  const inviteView = row => ({ id: row.id, code: row.code, url: `${origin}/__moa/join?code=${encodeURIComponent(row.code)}`,
+  const inviteView = (row, requestOrigin = origin) => ({ id: row.id, code: row.code, url: `${requestOrigin}/__moa/join?code=${encodeURIComponent(row.code)}`,
     label: row.label, maxUses: row.max_uses, uses: row.uses, expiresAt: row.expires_at === null ? null : new Date(row.expires_at).toISOString(),
     revoked: Boolean(row.revoked), createdAt: new Date(row.created_at).toISOString(),
     status: row.revoked ? 'revoked' : row.expires_at !== null && row.expires_at <= now() ? 'expired' : row.max_uses !== null && row.uses >= row.max_uses ? 'used-up' : 'active' });
@@ -59,6 +59,22 @@ export function accountsService(db, origin, now) {
       invalidate(user.id);
     });
   }
+  async function setup(code, username, password) {
+    username = typeof username === 'string' ? username.trim().toLowerCase() : '';
+    if (!/^[a-z0-9._-]{2,32}$/.test(username)) fail(400, 'invalid-username');
+    if (!passwordValid(password)) fail(400, 'invalid-password');
+    const salt = randomBytes(30).toString('hex'), hash = await passwordHash(password, salt);
+    return transaction(db, () => {
+      if (db.prepare('SELECT 1 FROM accounts LIMIT 1').get()) fail(409, 'already-set-up');
+      const stored = db.prepare("SELECT value FROM auth_state WHERE key='setup-code'").get()?.value;
+      const candidate = String(code ?? '').trim().toUpperCase();
+      if (!stored || !timingSafeEqual(createHash('sha256').update(stored).digest(), createHash('sha256').update(candidate).digest())) fail(400, 'invalid-setup-code');
+      const id = randomUUID();
+      db.prepare('INSERT INTO accounts(id,username,salt,hash,role,created_at) VALUES(?,?,?,?,?,?)').run(id, username, salt, hash, 'admin', now());
+      db.prepare("DELETE FROM auth_state WHERE key='setup-code'").run();
+      return get(id);
+    });
+  }
   async function join(code, username, password) {
     username = typeof username === 'string' ? username.trim().toLowerCase() : '';
     if (!/^[a-z0-9._-]{2,32}$/.test(username)) fail(400, 'invalid-username');
@@ -74,14 +90,14 @@ export function accountsService(db, origin, now) {
       return get(id);
     });
   }
-  async function api(method, path, actor, body) {
+  async function api(method, path, actor, body, requestOrigin = origin) {
     if (method === 'GET' && path === 'me') return accountView(actor);
     if (method === 'POST' && path === 'password') {
       if (!await verify(actor, body.current)) fail(400, 'incorrect-password');
       await changePassword(actor, body.next); return null;
     }
     if (actor.role !== 'admin') fail(403, 'admin-required');
-    if (path === 'invites' && method === 'GET') return db.prepare('SELECT * FROM invites ORDER BY created_at DESC,id').all().map(inviteView);
+    if (path === 'invites' && method === 'GET') return db.prepare('SELECT * FROM invites ORDER BY created_at DESC,id').all().map(row => inviteView(row, requestOrigin));
     if (path === 'invites' && method === 'POST') {
       const { label = '', maxUses, expiresInDays } = body;
       if (typeof label !== 'string' || label.length > 200 || !(maxUses === null || Number.isInteger(maxUses) && maxUses >= 1 && maxUses <= 100) ||
@@ -91,7 +107,7 @@ export function accountsService(db, origin, now) {
       const code = Array.from(randomBytes(16), b => alphabet[b % alphabet.length]).join('').match(/.{4}/g).join('-');
       const id = randomUUID();
       db.prepare('INSERT INTO invites(id,code,label,max_uses,expires_at,created_by,created_at) VALUES(?,?,?,?,?,?,?)').run(id, code, label, maxUses, expiresInDays === null ? null : now() + expiresInDays * 86400000, actor.id, now());
-      return inviteView(db.prepare('SELECT * FROM invites WHERE id=?').get(id));
+      return inviteView(db.prepare('SELECT * FROM invites WHERE id=?').get(id), requestOrigin);
     }
     const invite = /^invites\/([^/]+)$/.exec(path);
     if (invite && method === 'DELETE') {
@@ -127,5 +143,5 @@ export function accountsService(db, origin, now) {
     });
     fail(404, 'not-found');
   }
-  return { get, verify, join, api };
+  return { get, verify, join, setup, api };
 }

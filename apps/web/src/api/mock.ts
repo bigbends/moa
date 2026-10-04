@@ -115,6 +115,9 @@ function playback(episodeId: string): PlaybackSession {
 }
 
 /* Subtitle translation: jobs advance with wall-clock time so polling shows progress. */
+let tmdbConfig: { configured: boolean; source: string; credentialType: string | null; hasSavedCredential: boolean } = { configured: false, source: "none", credentialType: null, hasSavedCredential: false };
+let remoteAt = 0;
+let remote: any = { mode: "off", state: "off", url: null, urls: [], loginUrl: null, funnel: false, lastError: null, externallyManaged: false, available: true, desiredEnabled: false, gatewayServiceUrl: "http://moa-gateway:8080", warning: null, config: { mode: "off", publicHostname: "", funnel: false, cloudflareToken: null, tailscaleAuthKey: null } };
 let translationConfig: TranslationConfig = { configured: false, enabled: false, model: "gemini-flash-latest", batchSize: 120, requestIntervalMs: 1000, retryCount: 2, keys: [] };
 // Secrets stay here; the config only carries masked labels. A key containing "fail" fails jobs, "bad" fails validation.
 let translationSecrets: Array<{ id: string; secret: string }> = [];
@@ -295,6 +298,22 @@ export function installMockApi() {
       const who = body.candidateId === "c2" ? "예제 제작자 B" : body.candidateId === "c3" ? "예제 제작자 C" : "예제 제작자 A";
       return json({ id: `online-${body.candidateId}`, label: `${who} · 한국어`, lang: "ko", format: "vtt", source: "online", provenance: { creatorName: who, sourceUrl: "https://example.com" },
         url: `data:text/vtt,WEBVTT%0A%0A00:00:00.000 --> 00:10:00.000%0A${encodeURIComponent(who)} 님의 한국어 자막` });
+    }
+    if (path === "/admin/tmdb/config") {
+      if (method === "PATCH") tmdbConfig = "clear" in body ? { configured: false, source: "none", credentialType: null, hasSavedCredential: false } : { configured: true, source: "database", credentialType: "apiKey" in body ? "apiKey" : "token", hasSavedCredential: true };
+      return json(tmdbConfig);
+    }
+    if (path.startsWith("/admin/remote-access")) {
+      const action = path.split("/")[3];
+      if (action === "configure") remote = { ...remote, mode: body.mode, funnel: body.funnel ?? remote.funnel, config: { ...remote.config, mode: body.mode, publicHostname: body.publicHostname ?? remote.config.publicHostname, funnel: body.funnel ?? remote.config.funnel, cloudflareToken: body.cloudflareToken ? "********" : remote.config.cloudflareToken } };
+      if (action === "start") { remote = { ...remote, desiredEnabled: true, state: "starting", url: null, urls: [] }; remoteAt = Date.now(); }
+      if (action === "stop") remote = { ...remote, desiredEnabled: false, state: "off", url: null, urls: [], loginUrl: null };
+      if (remote.desiredEnabled && remote.state !== "connected" && Date.now() - remoteAt > 2500) {
+        const url = remote.mode === "cloudflare-quick" ? "https://quiet-river-sample-demo.trycloudflare.com" : remote.mode === "cloudflare-token" ? `https://${remote.config.publicHostname}` : "https://moa.tail1234.ts.net";
+        remote = remote.mode === "tailscale" && remote.state === "starting" ? { ...remote, state: "needs-login", loginUrl: "https://login.tailscale.com/a/example" } : { ...remote, state: "connected", url, urls: [url], loginUrl: null };
+        remoteAt = Date.now();
+      }
+      return json(remote);
     }
     if (path === "/translation/config") return json(translationConfig);
     if (path === "/admin/translation/config" && method === "PATCH") {

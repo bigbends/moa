@@ -1,7 +1,11 @@
 FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1
 WORKDIR /app
-COPY --chown=node:node server.mjs accounts.mjs join.html login.html login.css login.js icon.svg ./
+COPY --chown=node:node server.mjs accounts.mjs state.mjs moa-setup-code moa-admin setup.html join.html login.html login.css login.js icon.svg ./
 COPY LICENSE NOTICE ./
+RUN mkdir -p /data /config && chown node:node /data /config && chmod 700 /data /config \
+    && chmod +x /app/moa-setup-code /app/moa-admin \
+    && ln -s /app/moa-setup-code /usr/local/bin/moa-setup-code \
+    && ln -s /app/moa-admin /usr/local/bin/moa-admin
 USER node
 ENV PORT=8789 DATA_DIR=/data
 EXPOSE 8789

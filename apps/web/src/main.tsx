@@ -1,4 +1,5 @@
 import { AboutPage } from './pages/AboutPage';
+import { RemoteAccessPage } from './pages/RemoteAccessPage';
 import { installPlaybackFullscreen } from "./lib/playback-fullscreen";
 import { installRemoteNavigation } from "./lib/remote";
 import { StrictMode, useEffect, type ReactNode } from "react";
@@ -80,6 +81,7 @@ const router = createBrowserRouter([
       { path: "/sources", element: <RequireAdmin><SourcesPage /></RequireAdmin> },
       { path: "/sources/:id", element: <RequireAdmin><SourceBrowsePage /></RequireAdmin> },
       { path: "/library", element: <RequireAdmin><LibraryPage /></RequireAdmin> },
+      { path: "/remote-access", element: <RequireAdmin><RemoteAccessPage /></RequireAdmin> },
       { path: "/accounts", element: <AccountsPage /> },
       { path: "/about", element: <AboutPage /> },
       { path: "/settings", element: <SettingsPage /> },

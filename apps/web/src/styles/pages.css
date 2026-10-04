@@ -690,3 +690,92 @@
 .about-credit { padding: 20px; }
 .about-credit p { margin: 12px 0 0; line-height: 1.6; }
 .tmdb-credit-logo { width: 80px; height: auto; display: block; }
+
+/* TMDB credential, under the 작품 정보 row */
+.setting + .tmdb-setting { border-top: 1px solid var(--hairline); }
+.tmdb-setting .setting > div { flex: 1; }
+.tmdb-key { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 0 18px 16px 78px; }
+.tmdb-key-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.tmdb-key-form label { font-size: .85rem; font-weight: 650; color: var(--text-2); }
+.tmdb-key-row { display: flex; gap: 8px; min-width: 0; }
+.tmdb-key-row input { flex: 1; min-width: 0; height: 42px; padding: 0 12px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface-2); color: inherit; font: inherit; }
+.tmdb-key-row input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tmdb-key-row .btn { flex: none; }
+.tmdb-key code { font-size: .85em; }
+.tmdb-clear { justify-self: start; }
+@media (max-width: 640px) { .tmdb-key { padding: 0 14px 14px; } }
+/* Remote access */
+.remote-page .page-head { margin-bottom: 8px; }
+.remote-lead { margin: 0 0 26px; color: var(--text-2); line-height: 1.6; max-width: 56ch; }
+.remote-sk { display: block; height: 220px; border-radius: var(--radius-l); }
+.remote-note { padding: 18px 20px; border-radius: var(--radius-l); background: var(--surface-1); line-height: 1.6; }
+.remote-note p { margin: 4px 0 0; color: var(--text-2); }
+
+.remote-status { margin-bottom: 30px; padding: 18px 20px 20px; border-radius: var(--radius-l); background: var(--surface-1); border: 1px solid var(--hairline); }
+.remote-status.is-connected { border-color: color-mix(in srgb, var(--success) 40%, transparent); }
+.remote-status.is-error { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.remote-status-head { display: flex; align-items: center; gap: 12px; }
+.remote-status-head > div { flex: 1; display: grid; gap: 2px; }
+.remote-status-head small { display: inline-flex; align-items: center; gap: 4px; color: var(--text-3); font-size: .85rem; }
+.remote-dot { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--text-3); }
+.remote-dot.is-connected { background: var(--success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 22%, transparent); }
+.remote-dot.is-starting, .remote-dot.is-needs-login { background: var(--warning); animation: remote-pulse 1.4s ease-in-out infinite; }
+.remote-dot.is-error { background: var(--danger); }
+@keyframes remote-pulse { 50% { opacity: .35; } }
+.remote-status-body { margin: 14px 0 0; display: grid; gap: 12px; justify-items: start; color: var(--text-2); line-height: 1.6; }
+p.remote-status-body { display: flex; align-items: center; gap: 10px; }
+.remote-status-body p { margin: 0; }
+.remote-connected { display: flex; gap: 22px; align-items: center; margin-top: 18px; }
+.remote-qr { width: 156px; height: 156px; flex: none; border-radius: 12px; }
+.remote-url { display: grid; gap: 6px; min-width: 0; }
+.remote-url small { color: var(--text-3); font-size: .8rem; }
+.remote-url-text { font-size: 1.15rem; font-weight: 750; color: var(--text); overflow-wrap: anywhere; text-decoration: none; }
+.remote-url-text:hover { text-decoration: underline; text-underline-offset: 3px; }
+.remote-url-actions { margin-top: 4px; }
+.remote-url p { margin: 6px 0 0; color: var(--text-3); font-size: .85rem; line-height: 1.5; }
+
+.remote-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.remote-mode { display: grid; align-content: start; gap: 4px; padding: 16px; border: 1.5px solid var(--hairline); border-radius: var(--radius-l); background: var(--surface-1); color: inherit; font: inherit; text-align: left; cursor: pointer; transition: border-color .15s, background-color .15s; }
+.remote-mode:hover { background: var(--surface-2); }
+.remote-mode.is-selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--surface-1)); }
+.remote-mode:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.remote-mode-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.remote-mode-head em { font-style: normal; font-size: .72rem; font-weight: 700; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+.remote-mode-via { color: var(--text-3); font-size: .8rem; }
+.remote-mode-body { margin-top: 6px; color: var(--text-2); font-size: .88rem; line-height: 1.55; }
+.remote-mode-scope { margin-top: 10px; display: inline-flex; align-items: center; gap: 5px; font-size: .78rem; font-weight: 650; }
+.remote-mode-scope.is-public { color: var(--warning); }
+.remote-mode-scope.is-private { color: var(--text-3); }
+
+.remote-form { display: grid; gap: 14px; margin-top: 18px; }
+.remote-steps { margin: 0; padding: 14px 18px 14px 36px; border-radius: var(--radius-m); background: var(--surface-1); color: var(--text-2); line-height: 1.7; font-size: .92rem; }
+.remote-steps li + li { margin-top: 4px; }
+.remote-steps b { color: var(--text); font-weight: 650; }
+.remote-steps code, .remote-note code { padding: 1px 6px; border-radius: 5px; background: var(--surface-2); font-size: .85em; }
+.remote-steps .btn { margin-left: 6px; vertical-align: middle; min-height: 28px; padding: 0 10px; font-size: .8rem; }
+.remote-field { display: grid; gap: 6px; }
+.remote-field span { font-size: .85rem; font-weight: 650; color: var(--text-2); }
+.remote-field input, .remote-advanced input { width: 100%; height: 44px; padding: 0 12px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface-1); color: inherit; font: inherit; }
+.remote-field input:focus-visible, .remote-advanced input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.remote-switch { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border-radius: var(--radius-m); background: var(--surface-1); }
+.remote-switch > div { display: grid; gap: 3px; }
+.remote-switch small { color: var(--text-3); font-size: .85rem; line-height: 1.5; }
+.remote-advanced { border-radius: var(--radius-m); background: var(--surface-1); padding: 0 16px; }
+.remote-advanced summary { padding: 13px 0; cursor: pointer; color: var(--text-2); font-size: .9rem; font-weight: 600; }
+.remote-advanced p { margin: 0 0 10px; color: var(--text-3); font-size: .85rem; line-height: 1.5; }
+.remote-advanced input { margin-bottom: 14px; }
+.remote-warning { display: flex; gap: 10px; padding: 12px 14px; border-radius: var(--radius-m); background: color-mix(in srgb, var(--warning) 12%, transparent); color: color-mix(in srgb, var(--warning) 70%, var(--text)); line-height: 1.55; font-size: .9rem; }
+.remote-warning svg { flex: none; margin-top: 2px; }
+.remote-warning p { margin: 0; }
+.remote-actions { display: flex; justify-content: flex-end; }
+
+@media (max-width: 720px) {
+  .remote-modes { grid-template-columns: minmax(0, 1fr); }
+  .remote-connected { flex-direction: column; align-items: flex-start; }
+  .remote-qr { width: 180px; height: 180px; }
+  .remote-actions .btn { width: 100%; }
+}
+@media (max-width: 720px) {
+  .remote-mode:not(.is-selected) .remote-mode-body { display: none; }
+  .remote-mode:not(.is-selected) .remote-mode-scope { margin-top: 4px; }
+}

@@ -92,7 +92,24 @@ export function scoreResult(result: SearchResult, targets: Target[], expected: {
 
 /** Keeps a small number of TMDB requests in flight and retries rate limits. */
 export class Tmdb {
-  readonly enabled: boolean;
+  get enabled() { return Boolean(this.token || this.key); }
+  private environment: { token?: string; key?: string } = {};
+  private reload() {
+    const saved = JSON.parse(this.db.get("SELECT value FROM admin_settings WHERE key='tmdb'")?.value || '{}');
+    const effective = this.environment.token || this.environment.key ? this.environment : saved;
+    this.token = effective.token || undefined; this.key = effective.apiKey || effective.key || undefined;
+  }
+  status() {
+    const saved = JSON.parse(this.db.get("SELECT value FROM admin_settings WHERE key='tmdb'")?.value || '{}');
+    return { configured: this.enabled, source: this.environment.token || this.environment.key ? 'environment' : this.enabled ? 'database' : 'none',
+      credentialType: this.token ? 'token' : this.key ? 'apiKey' : null, hasSavedCredential: Boolean(saved.token || saved.apiKey) };
+  }
+  configure(value: { token?: string; apiKey?: string; clear?: boolean }) {
+    if (Object.keys(value).length !== 1 || value.clear !== undefined && value.clear !== true) throw new ApiFailure(400, 'invalid-request');
+    this.db.run("INSERT OR REPLACE INTO admin_settings VALUES('tmdb',?)", JSON.stringify(value.clear ? {} : value));
+    this.reload();
+    return this.status();
+  }
   private token?: string;
   private key?: string;
   private active = 0;
@@ -102,9 +119,9 @@ export class Tmdb {
   private seasonRequests = new Map<string, Promise<void>>();
   private abort = new AbortController();
   constructor(private db: Store, private log: (value: Record<string, unknown>) => void, options: { token?: string; key?: string; fetch?: typeof fetch } = { token: process.env.MOA_TMDB_TOKEN, key: process.env.MOA_TMDB_API_KEY }) {
-    this.token = options.token?.trim() || undefined; this.key = options.key?.trim() || undefined;
+    this.environment = { token: options.token?.trim() || undefined, key: options.key?.trim() || undefined };
+    this.reload();
     if (options.fetch) this.fetcher = options.fetch;
-    this.enabled = Boolean(this.token || this.key);
   }
   private fetcher: typeof fetch = (...args) => fetch(...args);
   private async slot() {

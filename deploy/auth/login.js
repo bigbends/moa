@@ -11,7 +11,8 @@
     reveal.setAttribute('aria-pressed', String(visible));
   });
   var joining = /\/join$/.test(location.pathname);
-  var idle = joining ? '가입하고 시작하기' : '로그인';
+  var settingUp = /\/setup$/.test(location.pathname);
+  var idle = settingUp ? '관리자 만들고 시작하기' : joining ? '가입하고 시작하기' : '로그인';
   var code = document.getElementById('code');
   if (code) code.addEventListener('input', function () {
     var raw = code.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16);
@@ -29,7 +30,7 @@
     confirmation.addEventListener('input', checkMatch);
     password.addEventListener('input', checkMatch);
   }
-  if (joining && code) {
+  if ((joining || settingUp) && code) {
     var initial = code.value ? document.getElementById('username') : code;
     if (initial) initial.focus();
   }
@@ -39,7 +40,7 @@
   if (form) form.addEventListener('submit', function () {
     // Keep the native submit control enabled while the browser submits the form.
     button.setAttribute('aria-busy', 'true');
-    button.textContent = joining ? '가입 중…' : '로그인 중…';
+    button.textContent = settingUp ? '만드는 중…' : joining ? '가입 중…' : '로그인 중…';
   });
   window.addEventListener('pageshow', function () {
     if (!button) return;

@@ -1,18 +1,20 @@
 services:
   moa:
+    image: ghcr.io/sidetool/moa:${MOA_VERSION:-latest}
+    pull_policy: always
     build: .
-    container_name: moa
     init: true
-    ports:
-      - "${MOA_BIND_ADDRESS:-127.0.0.1}:${MOA_PORT:-8795}:8795"
     environment:
       MOA_REQUIRE_ACCOUNT: "1"
+      MOA_CONNECTOR_URL: http://moa-gateway:8798
+      MOA_CONNECTOR_SECRET_FILE: /run/moa-connector/token
       MOA_MAX_TRANSCODES: "${MOA_MAX_TRANSCODES:-2}"
       MOA_TMDB_TOKEN: ${MOA_TMDB_TOKEN:-}
       MOA_TMDB_API_KEY: ${MOA_TMDB_API_KEY:-}
     volumes:
-      - ./data:/data
-      - ${MEDIA_PATH:-/srv/media}:${MEDIA_CONTAINER_PATH:-/media/library}:ro
+      - ${MOA_CONNECTOR_SECRET_PATH:-moa-connector-secret}:/run/moa-connector:ro
+      - ${MOA_DATA_PATH:-moa-data}:/data
+      - ${MEDIA_PATH:-moa-media}:${MEDIA_CONTAINER_PATH:-/media/library}:ro
     restart: unless-stopped
     logging:
       driver: json-file
@@ -26,18 +28,24 @@ services:
       start_period: 20s
       retries: 3
   moa-auth:
+    image: ghcr.io/sidetool/moa-auth:${MOA_VERSION:-latest}
+    pull_policy: always
     build: ./deploy/auth
     environment:
-      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:8796}
+      MOA_TRUST_GATEWAY: "1"
+      MOA_CONNECTOR_SECRET_FILE: /run/moa-connector/token
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-}
     volumes:
-      - ./data/auth/config:/config:ro
-      - ./data/auth/sessions:/data
+      - ${MOA_CONNECTOR_SECRET_PATH:-moa-connector-secret}:/run/moa-connector:ro
+      - ${MOA_AUTH_CONFIG_PATH:-moa-auth-config}:/config:ro
+      - ${MOA_AUTH_DATA_PATH:-moa-auth-data}:/data
     restart: unless-stopped
     logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
   moa-gateway:
+    networks: [default, connector]
     image: nginx:1.27-alpine
     ports:
-      - "${MOA_BIND_ADDRESS:-127.0.0.1}:${MOA_GATEWAY_PORT:-8796}:8080"
+      - "${MOA_BIND_ADDRESS:-0.0.0.0}:${MOA_GATEWAY_PORT:-8796}:8080"
     environment:
       PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
       PUBLIC_SCHEME: ${PUBLIC_SCHEME:-http}
@@ -50,3 +58,31 @@ services:
       moa-auth: {condition: service_healthy, restart: true}
     restart: unless-stopped
     logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+
+  moa-connector:
+    networks: [connector]
+    image: ghcr.io/sidetool/moa-connector:${MOA_VERSION:-latest}
+    pull_policy: always
+    build: ./services/connector
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,size=32m,uid=1000,gid=1000"]
+    volumes:
+      - ${MOA_CONNECTOR_DATA_PATH:-moa-connector-data}:/data
+      - ${MOA_CONNECTOR_SECRET_PATH:-moa-connector-secret}:/run/moa-connector
+    restart: unless-stopped
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+    # No host port, Docker socket, TUN device, or NET_ADMIN capability.
+
+volumes:
+  moa-data:
+  moa-auth-config:
+  moa-auth-data:
+  moa-media:
+  moa-connector-data:
+  moa-connector-secret:
+networks:
+  connector:
+    # Connector can reach the gateway, never the app API directly.

@@ -424,3 +424,5 @@ export interface JimakuCandidate {
 export interface JimakuSearch {
   searchId: string; query: { title: string; season: number; episode: number }; candidates: JimakuCandidate[]; warning?: string;
 }
+
+export type { RemoteAccessMode, RemoteAccessState, RemoteAccessConfig, RemoteAccessConfigure, RemoteAccessStatus } from './remote-access.js';

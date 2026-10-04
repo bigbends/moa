@@ -9,6 +9,8 @@ services:
     depends_on:
       moa-apk: {condition: service_healthy}
   moa-apk:
+    image: ghcr.io/sidetool/moa-apk:${MOA_VERSION:-latest}
+    pull_policy: always
     build:
       context: .
       dockerfile: deploy/aniyomi/Dockerfile

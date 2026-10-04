@@ -1,5 +1,8 @@
 # Optional locally managed Cloudflare tunnel. Both files are deployer-owned.
 services:
+  moa:
+    environment:
+      MOA_REMOTE_EXTERNALLY_MANAGED: "1"
   moa-tunnel:
     image: cloudflare/cloudflared@sha256:072c067d25ccbe61d46e18f0d0723255f2bb5304f7317caa95b27031520ff92c
     user: "${TUNNEL_UID:-1000}:${TUNNEL_GID:-1000}"

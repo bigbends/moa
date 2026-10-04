@@ -1,3 +1,5 @@
+import { RemoteAccess, connectorRpc } from './remote-access.js';
+import { readFile } from 'node:fs/promises';
 import { ImageCache, IMAGE_CACHE_TTL } from './image-cache.js';
 import { Franchises } from './franchise.js';
 import { Jimaku } from './translation/jimaku.js';
@@ -63,6 +65,19 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
   const app = Fastify({ logger, bodyLimit: 1024 * 1024, ajv: { customOptions: { removeAdditional: false, coerceTypes: 'array', allowUnionTypes: true } } });
   const db = services.store ?? new Store(cfg.dataDir), catalog = new Catalog(db);
   const sources = new Sources(db, catalog);
+  const connectorSecret = process.env.MOA_CONNECTOR_SECRET_FILE || '/run/moa-connector/token';
+  const remoteAccess = new RemoteAccess(cfg.dataDir, process.env.MOA_CONNECTOR_URL ? connectorRpc(process.env.MOA_CONNECTOR_URL, connectorSecret) : null, async () => {
+    if (!cfg.requireAccount) return false;
+    try {
+      const token = (await readFile(connectorSecret, 'utf8')).trim();
+      const [auth, gate] = await Promise.all([
+        fetch('http://moa-auth:8789/internal/remote-access-safety', { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(3000) }),
+        fetch('http://moa-gateway:8080/api/me', { redirect: 'manual', signal: AbortSignal.timeout(3000) }),
+      ]);
+      return auth.ok && (await auth.json() as { adminExists: boolean }).adminExists && gate.status === 401;
+    } catch { return false; }
+  }, process.env.MOA_REMOTE_EXTERNALLY_MANAGED === '1');
+
   const imageCache = new ImageCache(path.join(cfg.dataDir,'images'),undefined,Date.now,()=>app.log.warn({event:'image-cache-io-error'}));
   const cacheStatsTimer = setInterval(()=>app.log.info({event:'cache-stats',...sources.stats.snapshot()}),5*60_000); cacheStatsTimer.unref();
   const tmdb = new Tmdb(db, value => app.log.info(value), services.tmdb);
@@ -129,6 +144,25 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
       if (owner && !db.get('SELECT 1 FROM profiles WHERE id=? AND account_id=?', owner, req.moaAccount.id)) throw new ApiFailure(403, 'session-account-mismatch');
     }
   });
+  app.get('/api/admin/tmdb/config', async (_req, reply) => reply.header('Cache-Control', 'private, no-store').send(tmdb.status()));
+  app.patch('/api/admin/tmdb/config', { schema: { body: object({
+    token: { type: 'string', minLength: 16, maxLength: 4096, pattern: '^[A-Za-z0-9._-]+$' },
+    apiKey: { type: 'string', pattern: '^[a-fA-F0-9]{32}$' }, clear: { type: 'boolean' }
+  }) } }, async (req, reply) => {
+    const status = tmdb.configure(req.body as Parameters<Tmdb['configure']>[0]);
+    catalog.metadata = tmdb.enabled;
+    return reply.header('Cache-Control', 'private, no-store').send(status);
+  });
+  app.get('/api/admin/remote-access', async (_req, reply) => reply.header('Cache-Control', 'private, no-store').send(remoteAccess.status()));
+  const remoteConfigSchema = object({ mode: { type: 'string', enum: ['off', 'cloudflare-quick', 'cloudflare-token', 'tailscale'] }, publicHostname: { type: 'string', maxLength: 253 }, funnel: { type: 'boolean' }, cloudflareToken: { type: ['string', 'null'], minLength: 1, maxLength: 8192 }, tailscaleAuthKey: { type: ['string', 'null'], minLength: 1, maxLength: 1024 } }, ['mode']);
+  for (const action of ['configure', 'start', 'stop'] as const) {
+    app.post(`/api/admin/remote-access/${action}`, { schema: { body: action === 'configure' ? remoteConfigSchema : object({}) } }, async (req, reply) => {
+      // Require a JSON request and same-origin browser mutations; no form POST CSRF.
+      if (!req.headers['content-type']?.startsWith('application/json')) throw new ApiFailure(415, 'json-required');
+      if (req.headers.origin && req.headers.origin !== `${req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.headers.host}`) throw new ApiFailure(403, 'csrf-required');
+      return reply.header('Cache-Control', 'private, no-store').send(await remoteAccess.mutate(action, req.body as import('@moa/shared').RemoteAccessConfigure));
+    });
+  }
   app.get('/api/admin/cache-stats', async (_req,reply) => reply.header('Cache-Control','private, no-store').send(sources.stats.snapshot()));
   app.get('/api/me', async req => req.moaAccount);
   app.get('/api/episodes/:id/subtitles/jimaku', { schema: { params: idParams(), querystring: object({ title: { type: 'string', minLength: 1, maxLength: 300 }, season: { type: 'integer', minimum: 1, maximum: 99 }, episode: { type: 'number', minimum: 0, maximum: 10000 } }) } }, async req => jimaku.search(params(req).id, profile(req), query(req)));
@@ -420,7 +454,7 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
   // Periodic scans reuse the same incremental scan path; disabled with 0 for tests.
   const interval = Math.max(0, Number(process.env.MOA_SCAN_INTERVAL_MS ?? 6 * 60 * 60 * 1000));
   const scanTimer = interval > 0 ? setInterval(() => library.start(), interval) : undefined; scanTimer?.unref();
-  app.addHook('onReady', async () => { enrichment.schedule(); void tmdb.backfill().catch(error => app.log.warn({ event: 'tmdb-backfill-error', error: String(error) })); });
-  app.addHook('onClose', async () => { clearInterval(cacheStatsTimer); await imageCache.close(); if (scanTimer) clearInterval(scanTimer); await franchises.close(); tmdb.close(); await jimaku.close(); await translations.close(); online.close(); remotePlayback.close(); await sources.close(); await library.pending; await enrichment.close(); await playback.close(); db.close(); });
+  app.addHook('onReady', async () => { await remoteAccess.init(); enrichment.schedule(); void tmdb.backfill().catch(error => app.log.warn({ event: 'tmdb-backfill-error', error: String(error) })); });
+  app.addHook('onClose', async () => { remoteAccess.close(); clearInterval(cacheStatsTimer); await imageCache.close(); if (scanTimer) clearInterval(scanTimer); await franchises.close(); tmdb.close(); await jimaku.close(); await translations.close(); online.close(); remotePlayback.close(); await sources.close(); await library.pending; await enrichment.close(); await playback.close(); db.close(); });
   return { app, db, sources, remotePlayback, catalog, library, playback, online, translations, jimaku, enrichment, config: cfg };
 }

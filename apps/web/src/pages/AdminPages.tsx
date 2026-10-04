@@ -1,12 +1,13 @@
 import { remotePreference, setRemotePreference, type RemotePreference } from "../lib/remote";
 import { NavigationSettings } from "../components/NavigationSettings";
 import { devicePrefs, setDevicePref, type DevicePrefs } from "../lib/device-prefs";
-import { Info, ChevronRight, Clapperboard, Folder, FolderOpen, FolderPlus, RefreshCw, Trash2, Tv, X } from "lucide-react";
+import { Globe, Info, ChevronRight, Folder, FolderOpen, FolderPlus, RefreshCw, Trash2, Tv, X } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { LibraryFolder, MediaType, ScanStatus, Settings } from "@moa/shared";
 import { NetworkSettings } from "../components/NetworkSettings";
+import { TmdbSettings } from "../components/TmdbSettings";
 import { TranslationSettings } from "../components/TranslationSettings";
 import { SubtitleAdvancedSettings } from "../components/SubtitleAdvancedSettings";
 import { translationModeOf, useTranslationConfig, type TranslationMode } from "../api/translation";
@@ -159,7 +160,6 @@ export function SettingsPage() {
   const settings = useSettings();
   const admin = useMe().data?.role === "admin";
   const translation = useTranslationConfig().data;
-  const metadata = useQuery({ queryKey: ["metadata-status"], queryFn: () => api<{ tmdb: boolean }>("/metadata/status"), staleTime: 5 * 60_000 });
   const client = useQueryClient();
   const { pathname } = useLocation();
   useEffect(() => {
@@ -237,8 +237,8 @@ export function SettingsPage() {
         <div className="settings-card">
           {link("/sources", <Tv size={20} />, "영상 소스", "확장 저장소, 소스 설치·업데이트·설정")}
           {link("/library", <FolderOpen size={20} />, "로컬 라이브러리", "영상 폴더 추가와 스캔")}
-          <div className="setting"><span className="setting-icon"><Clapperboard size={20} /></span><div><b>작품 정보</b><small>포스터·배경·줄거리·출연진·회차 정보를 TMDB에서 가져와요. 잘못 연결된 작품은 상세 화면 아래에서 고칠 수 있어요.</small></div>
-            <span className={cx("status-pill", metadata.data?.tmdb && "is-ok")}>{metadata.isPending ? "확인 중" : metadata.data?.tmdb ? "사용 중" : "꺼짐"}</span></div>
+          <TmdbSettings />
+          {link("/remote-access", <Globe size={20} />, "원격 접속", "집 밖에서도 MOA 열기 · 주소와 QR")}
         </div>
         <p className="settings-hint">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
       </section>

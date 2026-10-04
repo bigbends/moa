@@ -67,29 +67,21 @@ MOA는 직접 운영하는 영상 스트리밍 앱입니다. 여러 확장 소�
 
 ## 빠른 시작
 
-Docker Engine·Compose와 Python 3가 필요합니다. 새 설치는 다음 순서로 시작합니다.
+Linux는 Docker Engine과 Compose 플러그인, macOS·Windows는 Docker Desktop이 필요합니다. Windows에서는 WSL2를 켜고 Linux 컨테이너를 사용합니다.
 
-```sh
-git clone https://github.com/sidetool/moa.git
-cd moa
-cp .env.example .env
-mkdir -p data/auth/config data/auth/sessions deploy/local
-python3 deploy/auth/set-password.py  # 첫 관리자 아이디와 비밀번호를 만듭니다
-```
+1. 저장소를 받고 실행합니다. `.env`나 별도 빌드는 필요 없습니다.
 
-`.env`의 `MEDIA_PATH`를 내 미디어 폴더로 바꿉니다. 작품 정보를 쓰려면 `MOA_TMDB_TOKEN` 또는 `MOA_TMDB_API_KEY`도 채웁니다. 데이터 디렉터리는 컨테이너 사용자(UID 1000)가 쓸 수 있어야 합니다.
+   ```sh
+   git clone https://github.com/sidetool/moa.git
+   cd moa
+   docker compose up -d
+   docker compose logs moa-auth
+   ```
 
-```sh
-sudo chown -R 1000:1000 data
-sudo chmod 700 data/auth/config data/auth/sessions
-sudo chmod 600 data/auth/config/credentials.json
-docker compose config --quiet
-docker compose up -d --build
-```
+2. 로그의 `Setup code`를 확인합니다. 브라우저에서 `http://localhost:8796`(다른 기기는 `http://서버의-LAN-IP:8796`)을 열고 코드를 입력한 뒤 관리자 계정을 만듭니다.
+3. 설정에서 사용할 소스와 로컬 라이브러리를 추가합니다. 기본 확장 저장소는 없습니다. 내 영상 폴더 연결, TMDB 키, APK 확장, HTTPS와 업그레이드는 [배포 문서](docs/DEPLOYMENT.md)를 보세요.
 
-브라우저에서 `http://localhost:8796`을 열고 위에서 만든 관리자 계정으로 로그인합니다. 설정 → 로컬 라이브러리에서 `/media/library`의 폴더를 등록하고 스캔합니다. 기본 포트는 로컬에만 열리며, 계정 헤더를 신뢰하는 앱 포트 `8795`는 외부에 노출하지 않습니다.
-
-APK 확장은 공유 token과 읽기 권한을 준비한 뒤 `.env`를 `COMPOSE_FILE=compose.yaml:compose.aniyomi.yaml`로 바꿉니다. Cloudflare 터널은 본인 config·credentials를 준비하고 `:compose.tunnel.yaml`을 추가합니다. 두 구성은 선택 사항이며 함께 사용할 수 있습니다(Linux 구분자 기준). 원격 접속용 HTTPS·주소 설정, token 생성과 기존 설치 업그레이드는 [배포 문서](docs/DEPLOYMENT.md)를 보세요.
+설정 코드는 `docker compose exec moa-auth moa-setup-code`로 다시 확인할 수 있습니다. 데이터와 계정은 Docker volume에 보관합니다. gateway 포트 `8796`은 LAN에 열리고, 앱 포트 `8795`는 호스트에 열리지 않으며 모든 접속은 로그인 gateway를 거칩니다. 설정 → 원격 접속에서 Cloudflare 또는 Tailscale 주소와 QR을 만들 수 있습니다([원격 접속 안내](docs/REMOTE-ACCESS.md)).
 
 ## 확장 소스
 

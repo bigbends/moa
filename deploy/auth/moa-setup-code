@@ -1,0 +1,6 @@
+#!/usr/bin/env node
+import { openState, setupCode } from './state.mjs';
+if (process.argv.slice(2).some(arg => arg !== '--regenerate')) { console.error('Usage: moa-setup-code [--regenerate]'); process.exit(1); }
+const { database } = openState();
+try { console.log(setupCode(database, process.argv.includes('--regenerate')) ?? 'already set up'); }
+finally { database.close(); }
