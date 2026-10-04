@@ -66,7 +66,7 @@ export class Connector {
       }
       this.child('cloudflared', args, output); return;
     }
-    this.child('tailscaled', ['--tun=userspace-networking', `--state=${this.dir}/tailscaled.state`, '--socket=/tmp/tailscaled.sock']);
+    this.child('tailscaled', ['--tun=userspace-networking', `--state=${this.dir}/tailscaled.state`, `--statedir=${this.dir}`, '--socket=/tmp/tailscaled.sock']);
     // Wait for local daemon readiness, without holding an RPC open for login.
     for (let i = 0; i < 20; i++) {
       try { await this.ts(['status', '--json']); break; } catch { await new Promise(resolve => setTimeout(resolve, 100)); }

@@ -734,7 +734,7 @@ p.remote-status-body { display: flex; align-items: center; gap: 10px; }
 .remote-url-actions { margin-top: 4px; }
 .remote-url p { margin: 6px 0 0; color: var(--text-3); font-size: .85rem; line-height: 1.5; }
 
-.remote-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.remote-modes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .remote-mode { display: grid; align-content: start; gap: 4px; padding: 16px; border: 1.5px solid var(--hairline); border-radius: var(--radius-l); background: var(--surface-1); color: inherit; font: inherit; text-align: left; cursor: pointer; transition: border-color .15s, background-color .15s; }
 .remote-mode:hover { background: var(--surface-2); }
 .remote-mode.is-selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--surface-1)); }

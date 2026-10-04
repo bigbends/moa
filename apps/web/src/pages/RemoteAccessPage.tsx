@@ -7,14 +7,18 @@ import { api, ApiError } from '../lib/api';
 import { cx } from '../lib/format';
 import { Button, Skeleton, Spinner } from '../components/ui';
 
-type Mode = Exclude<RemoteAccessMode, 'off'>;
+/** What the user picks. Tailscale Funnel and tailnet-only share one backend mode but are different promises. */
+type Choice = 'cloudflare-quick' | 'tailscale-funnel' | 'cloudflare-token' | 'tailscale';
 const statusKey = ['remote-access'] as const;
 
-const MODES: { mode: Mode; title: string; via: string; short: string; body: string }[] = [
-  { mode: 'cloudflare-quick', title: '빠른 연결', via: 'Cloudflare · 계정 없이', short: 'Cloudflare 빠른 연결', body: '버튼 하나로 임시 주소를 만들어요. 서버를 다시 켜면 주소가 바뀌어서 써 보기에 좋아요.' },
-  { mode: 'cloudflare-token', title: '내 도메인으로 연결', via: 'Cloudflare Tunnel', short: 'Cloudflare Tunnel', body: '내 도메인을 고정 주소로 써요. Cloudflare 계정과 도메인이 필요해요.' },
-  { mode: 'tailscale', title: '내 기기에서만', via: 'Tailscale', short: 'Tailscale', body: 'Tailscale에 로그인한 내 기기에서만 열려요. 인터넷에 공개되지 않아 가장 안전해요.' }
+const MODES: { choice: Choice; mode: Exclude<RemoteAccessMode, 'off'>; funnel: boolean; title: string; via: string; body: string; public: boolean }[] = [
+  { choice: 'tailscale-funnel', mode: 'tailscale', funnel: true, title: '고정 주소로 공개', via: 'Tailscale Funnel', public: true, body: '서버에서 Tailscale에 한 번 로그인하면 바뀌지 않는 주소가 생겨요. 보는 사람은 아무것도 설치하지 않아도 돼요.' },
+  { choice: 'cloudflare-quick', mode: 'cloudflare-quick', funnel: false, title: '빠른 연결', via: 'Cloudflare · 계정 없이', public: true, body: '버튼 하나로 임시 주소를 만들어요. 서버를 다시 켜면 주소가 바뀌어서 써 보기에 좋아요.' },
+  { choice: 'cloudflare-token', mode: 'cloudflare-token', funnel: false, title: '내 도메인으로 연결', via: 'Cloudflare Tunnel', public: true, body: '내 도메인을 고정 주소로 써요. Cloudflare 계정과 도메인이 필요해요.' },
+  { choice: 'tailscale', mode: 'tailscale', funnel: false, title: '내 기기에서만', via: 'Tailscale', public: false, body: '인터넷에 공개하지 않아요. 보는 기기마다 Tailscale 앱을 설치하고 같은 계정으로 로그인해야 열려요.' }
 ];
+const choiceOf = (mode: RemoteAccessMode, funnel: boolean): Choice | null => mode === 'off' ? null : mode === 'tailscale' ? (funnel ? 'tailscale-funnel' : 'tailscale') : mode;
+const byChoice = (choice: Choice) => MODES.find(m => m.choice === choice)!;
 
 const ERRORS: Record<string, string> = {
   'connector-unavailable': '연결 도우미(moa-connector)가 실행 중이 아니에요. 서버에서 컨테이너가 켜져 있는지 확인해 주세요.',
@@ -28,7 +32,7 @@ const ERRORS: Record<string, string> = {
   'remote-access-externally-managed': '서버 설정 파일로 관리되는 터널이 있어서 여기서 바꿀 수 없어요.'
 };
 const errorText = (code: string | null | undefined) => code ? ERRORS[code] ?? '연결하지 못했어요. 잠시 후 다시 시도해 주세요.' : '';
-const modeName = (mode: RemoteAccessMode) => MODES.find(m => m.mode === mode)?.short ?? '';
+const modeName = (mode: RemoteAccessMode, funnel: boolean) => { const c = choiceOf(mode, funnel); return c ? byChoice(c).via : ''; };
 const isPublic = (mode: RemoteAccessMode, funnel: boolean) => mode === 'cloudflare-quick' || mode === 'cloudflare-token' || (mode === 'tailscale' && funnel);
 
 function QrCode({ text }: { text: string }) {
@@ -67,7 +71,7 @@ function StatusCard({ status, onStop, onRetry, busy }: { status: RemoteAccessSta
       <span className={cx('remote-dot', `is-${status.state}`)} aria-hidden="true" />
       <div>
         <b>{status.state === 'connected' ? '연결됨' : status.state === 'needs-login' ? '로그인이 필요해요' : status.state === 'error' ? '연결하지 못했어요' : '연결하는 중…'}</b>
-        <small>{modeName(status.mode)} · {pub ? <><Globe size={12} /> 인터넷에 공개</> : <><Lock size={12} /> 내 기기에서만</>}</small>
+        <small>{modeName(status.mode, status.funnel)} · {pub ? <><Globe size={12} /> 인터넷에 공개</> : <><Lock size={12} /> 내 기기에서만</>}</small>
       </div>
       <Button type="button" variant="ghost" disabled={busy} onClick={onStop}>연결 끊기</Button>
     </header>
@@ -86,7 +90,7 @@ function StatusCard({ status, onStop, onRetry, busy }: { status: RemoteAccessSta
     {status.state === 'starting' && <p className="remote-status-body"><Spinner size={16} /> 연결 프로그램을 켜고 있어요. 보통 10초 안에 끝나요.</p>}
 
     {status.state === 'needs-login' && <div className="remote-status-body">
-      <p>Tailscale 계정으로 이 서버를 내 기기 목록에 추가해 주세요. 로그인을 마치면 15초쯤 뒤 자동으로 연결돼요.</p>
+      <p>이 서버를 Tailscale 계정에 한 번 연결해야 해요. 아래 버튼으로 로그인을 마치면 15초쯤 뒤 자동으로 연결돼요.</p>
       {status.loginUrl && <a className="btn btn-primary btn-m" href={status.loginUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} /><span>Tailscale에 로그인</span></a>}
     </div>}
 
@@ -106,38 +110,38 @@ export function RemoteAccessPage() {
     refetchInterval: query => { const s = query.state.data; return s?.desiredEnabled && s.state !== 'connected' ? 2500 : 10_000; }
   });
   const s = status.data;
-  const [mode, setMode] = useState<Mode | null>(null);
+  const [picked, setPicked] = useState<Choice | null>(null);
   const [token, setToken] = useState('');
   const [hostname, setHostname] = useState<string | null>(null);
-  const [funnel, setFunnel] = useState<boolean | null>(null);
   const [authKey, setAuthKey] = useState('');
   const [error, setError] = useState('');
 
-  const current: Mode = mode ?? (s && s.config.mode !== 'off' ? s.config.mode : 'cloudflare-quick');
+  const saved = s ? choiceOf(s.config.mode, s.config.funnel) : null;
+  const current: Choice = picked ?? saved ?? 'tailscale-funnel';
+  const choice = byChoice(current);
   const host = hostname ?? s?.config.publicHostname ?? '';
-  const wantFunnel = funnel ?? s?.config.funnel ?? false;
   const running = !!s?.desiredEnabled;
-  const sameMode = running && s?.mode === current;
+  const sameMode = running && !!s && choiceOf(s.mode, s.funnel) === current;
 
   const act = useMutation({
     mutationFn: async (action: 'connect' | 'stop' | 'retry') => {
       if (action === 'stop') return api<RemoteAccessStatus>('/admin/remote-access/stop', { method: 'POST', body: {} });
       if (action === 'retry') return api<RemoteAccessStatus>('/admin/remote-access/start', { method: 'POST', body: {} });
-      const body: RemoteAccessConfigure = { mode: current };
+      const body: RemoteAccessConfigure = { mode: choice.mode };
       if (current === 'cloudflare-token') { body.publicHostname = host.trim(); if (token.trim()) body.cloudflareToken = token.trim(); }
-      if (current === 'tailscale') { body.funnel = wantFunnel; if (authKey.trim()) body.tailscaleAuthKey = authKey.trim(); }
+      if (choice.mode === 'tailscale') { body.funnel = choice.funnel; if (authKey.trim()) body.tailscaleAuthKey = authKey.trim(); }
       const configured = await api<RemoteAccessStatus>('/admin/remote-access/configure', { method: 'POST', body: { ...body } as Record<string, string | boolean | null> });
       return configured.desiredEnabled ? configured : api<RemoteAccessStatus>('/admin/remote-access/start', { method: 'POST', body: {} });
     },
     onMutate: () => setError(''),
-    onSuccess: data => { client.setQueryData(statusKey, data); setToken(''); setAuthKey(''); setMode(null); setHostname(null); setFunnel(null); },
+    onSuccess: data => { client.setQueryData(statusKey, data); setToken(''); setAuthKey(''); setPicked(null); setHostname(null); },
     onError: e => setError(errorText(e instanceof ApiError ? e.code : 'unknown'))
   });
 
   const tokenSaved = s?.config.cloudflareToken === '********';
-  const changed = !!token.trim() || !!authKey.trim() || (hostname !== null && hostname !== s?.config.publicHostname) || (funnel !== null && funnel !== s?.config.funnel);
+  const changed = !!token.trim() || !!authKey.trim() || (hostname !== null && hostname !== s?.config.publicHostname);
   const ready = (current !== 'cloudflare-token' || ((token.trim() || tokenSaved) && host.trim())) && (!sameMode || changed);
-  const pub = isPublic(current, wantFunnel);
+  const pub = choice.public;
   const gateway = (s?.gatewayServiceUrl ?? 'http://moa-gateway:8080').replace(/^https?:\/\//, '');
 
   return <div className="page-pad narrow settings-page remote-page">
@@ -155,13 +159,12 @@ export function RemoteAccessPage() {
           <h2>{running ? '연결 방식' : '어떻게 연결할까요?'}</h2>
           <div className="remote-modes" role="radiogroup" aria-label="연결 방식">
             {MODES.map(m => {
-              const selected = m.mode === current;
-              const open = isPublic(m.mode, m.mode === 'tailscale' && selected && wantFunnel);
-              return <button key={m.mode} type="button" role="radio" aria-checked={selected} className={cx('remote-mode', selected && 'is-selected')} onClick={() => { setMode(m.mode); setError(''); }}>
-                <span className="remote-mode-head"><b>{m.title}</b>{running && s.mode === m.mode && <em>사용 중</em>}</span>
+              const selected = m.choice === current;
+              return <button key={m.choice} type="button" role="radio" aria-checked={selected} className={cx('remote-mode', selected && 'is-selected')} onClick={() => { setPicked(m.choice); setError(''); }}>
+                <span className="remote-mode-head"><b>{m.title}</b>{running && choiceOf(s.mode, s.funnel) === m.choice && <em>사용 중</em>}</span>
                 <small className="remote-mode-via">{m.via}</small>
                 <span className="remote-mode-body">{m.body}</span>
-                <span className={cx('remote-mode-scope', open ? 'is-public' : 'is-private')}>{open ? <><Globe size={13} /> 인터넷에 공개</> : <><Lock size={13} /> 내 기기에서만</>}</span>
+                <span className={cx('remote-mode-scope', m.public ? 'is-public' : 'is-private')}>{m.public ? <><Globe size={13} /> 인터넷에 공개</> : <><Lock size={13} /> 내 기기에서만</>}</span>
               </button>;
             })}
           </div>
@@ -181,17 +184,11 @@ export function RemoteAccessPage() {
               </label>
             </>}
 
-            {current === 'tailscale' && <>
-              <div className="remote-switch">
-                <div><b>인터넷에 공개 (Funnel)</b><small>Tailscale이 없는 사람도 주소로 들어올 수 있게 해요. Tailscale 관리 화면에서 Funnel을 허용해야 해요.</small></div>
-                <button type="button" role="switch" aria-checked={wantFunnel} aria-label="인터넷에 공개" className={cx('switch', wantFunnel && 'is-on')} onClick={() => setFunnel(!wantFunnel)}><i /></button>
-              </div>
-              <details className="remote-advanced">
-                <summary>인증 키로 연결 (선택)</summary>
-                <p>로그인 링크 대신 Tailscale 관리 화면에서 만든 인증 키로 연결해요. 보통은 비워 두면 돼요.</p>
-                <input type="password" autoComplete="off" spellCheck={false} value={authKey} onChange={e => setAuthKey(e.target.value)} placeholder={s.config.tailscaleAuthKey ? '저장됨 · 바꿀 때만 입력' : 'tskey-auth-…'} aria-label="Tailscale 인증 키" />
-              </details>
-            </>}
+            {choice.mode === 'tailscale' && <details className="remote-advanced">
+              <summary>인증 키로 연결 (선택)</summary>
+              <p>로그인 링크 대신 Tailscale 관리 화면에서 만든 인증 키로 연결해요. 보통은 비워 두면 돼요.</p>
+              <input type="password" autoComplete="off" spellCheck={false} value={authKey} onChange={e => setAuthKey(e.target.value)} placeholder={s.config.tailscaleAuthKey ? '저장됨 · 바꿀 때만 입력' : 'tskey-auth-…'} aria-label="Tailscale 인증 키" />
+            </details>}
 
             {pub && !sameMode && <div className="remote-warning" role="note"><ShieldAlert size={18} /><p>주소를 아는 사람은 누구나 MOA 로그인 화면까지 들어올 수 있어요. 모든 계정의 비밀번호를 길고 서로 다르게 정해 두세요.</p></div>}
             {error && <p className="settings-error" role="alert">{error}</p>}
