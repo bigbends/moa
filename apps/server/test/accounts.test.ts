@@ -45,7 +45,7 @@ test('account boundaries, legacy claim, avatars, profile limits and admin routes
       ['GET','/api/source-repositories'], ['DELETE','/api/source-repositories'], ['POST','/api/sources/refresh'],
       ['POST','/api/sources/x/install'], ['POST','/api/sources/x/rollback'], ['POST','/api/sources/x/check'],
       ['PATCH','/api/sources/x'], ['GET','/api/sources/x/preferences'], ['PATCH','/api/sources/x/preferences'],
-      ['GET','/api/admin/remote-access'], ['POST','/api/admin/remote-access/start'], ['POST','/api/admin/remote-access/stop'], ['POST','/api/admin/remote-access/configure'],
+      ['GET','/api/admin/apk/status'], ['GET','/api/admin/remote-access'], ['POST','/api/admin/remote-access/start'], ['POST','/api/admin/remote-access/stop'], ['POST','/api/admin/remote-access/configure'],
       ['GET','/api/library/folders'], ['POST','/api/library/folders'], ['DELETE','/api/library/folders/x'],
       ['GET','/api/library/browse'], ['POST','/api/library/scan'], ['GET','/api/library/status'],
       ['PATCH','/api/media/x/metadata'], ['DELETE','/api/episodes/x/subtitles/y'], ['DELETE','/api/admin/accounts/admin-id/data'],

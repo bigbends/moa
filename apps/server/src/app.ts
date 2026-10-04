@@ -144,6 +144,7 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
       if (owner && !db.get('SELECT 1 FROM profiles WHERE id=? AND account_id=?', owner, req.moaAccount.id)) throw new ApiFailure(403, 'session-account-mismatch');
     }
   });
+  app.get('/api/admin/apk/status', async (_req, reply) => reply.header('Cache-Control', 'private, no-store').send(await sources.apk.status()));
   app.get('/api/admin/tmdb/config', async (_req, reply) => reply.header('Cache-Control', 'private, no-store').send(tmdb.status()));
   app.patch('/api/admin/tmdb/config', { schema: { body: object({
     token: { type: 'string', minLength: 16, maxLength: 4096, pattern: '^[A-Za-z0-9._-]+$' },

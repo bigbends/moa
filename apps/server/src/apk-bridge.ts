@@ -25,6 +25,13 @@ export class ApkBridge {
     if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash || !secret || secret.length < 32) throw new Error('invalid-apk-bridge-config');
     this.endpoint = url; this.secret = secret;
   }
+  async status(): Promise<{ available: boolean; state: 'disabled' | 'ready' | 'unreachable'; workers: number | null }> {
+    if (!this.endpoint) return { available: false, state: 'disabled', workers: null };
+    try {
+      const runtime = await this.rpc<{ workers: number }>('status', {}, AbortSignal.timeout(3000));
+      return { available: true, state: 'ready', workers: runtime.workers };
+    } catch { return { available: false, state: 'unreachable', workers: null }; }
+  }
   private async request(path: string, signal: AbortSignal, body?: Buffer, range?: string) {
     if (!this.endpoint || !this.secret) throw new ApiFailure(503, 'apk-bridge-unavailable');
     const url = new URL(path, this.endpoint);

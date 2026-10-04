@@ -1,0 +1,11 @@
+# Optional low-memory setup: docker compose -f compose.yaml -f compose.no-apk.yaml up -d
+# Do not activate the apk profile. Existing APK data is retained.
+services:
+  moa:
+    environment:
+      MOA_APK_URL: ""
+      MOA_APK_SECRET_FILE: ""
+    depends_on:
+      moa-apk: {condition: service_healthy, required: false}
+  moa-apk:
+    profiles: [apk]

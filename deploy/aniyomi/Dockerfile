@@ -17,7 +17,8 @@ COPY services/aniyomi-worker/browser/package*.json ./browser/
 RUN npm ci --omit=dev --prefix browser && node browser/node_modules/patchright/cli.js install --with-deps chromium \
     && apt-get install -y --no-install-recommends fontconfig fonts-nanum util-linux \
     && npm cache clean --force && rm -rf /var/lib/apt/lists/*
-RUN groupadd -g 10001 moa && useradd -u 10001 -g moa -m moa && mkdir /data && chown moa:moa /data
+RUN groupadd -g 10001 moa && useradd -u 10001 -g moa -m moa && mkdir -p /data /run/moa-apk && chown moa:moa /data \
+    && chown 10001:1000 /run/moa-apk && chmod 2750 /run/moa-apk
 COPY --from=build /src/build/target/apk-worker-0.1.0.jar ./build/target/apk-worker-0.1.0.jar
 COPY --from=build /src/build/dependencies ./build/dependencies
 COPY --from=build /src/build/build-inventory.json /src/build/UPSTREAM-LICENSE /src/build/ANIYOMI-LICENSE ./build/

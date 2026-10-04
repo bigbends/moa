@@ -70,26 +70,34 @@ Linux에서 `.env`의 `COMPOSE_FILE`에 콜론으로 override를 추가한다. �
 
 | 구성 | override | 준비 |
 | --- | --- | --- |
-| APK worker | `compose.aniyomi.yaml` | worker와 앱이 공유할 token 파일 |
+| 기존 APK token 파일 호환 | `compose.aniyomi.yaml` | 이미 사용 중인 token 파일을 그대로 유지 |
+| APK 실행 환경 끄기 | `compose.no-apk.yaml` | 선택 사항, `apk` profile을 활성화하지 않음 |
 | Linux VAAPI | `compose.vaapi.yaml` | render 장치의 GID와 GPU 드라이버 |
 | Cloudflare tunnel | `compose.tunnel.yaml` | 배포자 소유 tunnel config와 credentials |
 
-APK worker 예:
+### APK 기본 구성과 기존 설치
+
+APK worker는 기본 compose에 포함된다. 새 설치에는 `.env` 수정이나 token 파일 생성이 필요 없다. worker가 `moa-apk-secret` volume의 token을 원자적으로 생성하고 건강 상태가 확인된 뒤 앱이 시작한다. token은 UID 10001 / GID 1000, mode 0640이며 앱에는 읽기 전용이다. JVM과 Chromium은 요청이 있을 때만 시작하며, 비활성 JVM은 기본 10분 뒤 종료된다(재생 중인 worker 제외). 컨테이너는 기존 메모리 1 GiB, CPU 2개, PID 192개 제한과 읽기 전용 루트·capability 제거를 유지한다. 호스트 포트는 없다. 격리된 새 설치에서 측정한 유휴 RSS는 컨테이너 내 프로세스 합계 약 67.8 MiB(Node 약 64.5 MiB)였으며 JVM·Chromium은 실행되지 않았다. 설치된 확장이 없는 상태의 측정이고, 사용 중 메모리·공유 페이지·호스트에 따라 달라진다.
+
+`moa-apk-data`는 기존과 같은 named volume이다. Compose 프로젝트가 `moa`이면 **`moa_moa-apk-data`를 그대로 사용**한다. 설치된 패키지, 변환 캐시와 worker 상태를 다른 volume으로 옮기지 않는다. 이번 변경은 Java 도구·fingerprint 계산·변환기를 바꾸지 않으므로 재설치나 reprepare가 필요 없다.
+
+**기존 production 설정은 변경하지 않아도 된다.** `COMPOSE_FILE=compose.yaml:compose.aniyomi.yaml:compose.vaapi.yaml:compose.tunnel.yaml`과 `MOA_APK_TOKEN_FILE=./data/apk-config/token`을 그대로 유지한다. 호환 overlay는 앱과 worker가 기존 `/run/secrets/apk-token`을 사용하게 하고 자동 생성을 끈다. 기존 token의 UID/ACL·프로젝트 이름·APK volume·`MOA_DATA_PATH`, `MOA_AUTH_DATA_PATH`, `MOA_AUTH_CONFIG_PATH` 등 기존 bind 설정을 보존한다. 새 기본 secret volume이 추가되지만 이 호환 모드에서는 token을 생성하거나 교체하지 않는다. 기존 overlay를 제거할 필요가 없다. 정상 업그레이드에서 `down -v`를 사용하지 않는다.
+
+새 token 저장소를 bind로 관리할 때만 `MOA_APK_SECRET_PATH=./data/apk-secret`를 추가하고 새 경로를 준비한다:
 
 ```sh
-mkdir -p data/apk-config
-python3 - <<'PYTOKEN'
-from pathlib import Path
-import os, secrets
-p = Path('data/apk-config/token')
-fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-with os.fdopen(fd, 'w') as out:
-    out.write(secrets.token_hex(32) + '\n')
-PYTOKEN
-sudo chown 10001:10001 data/apk-config/token
+sudo install -d -o 10001 -g 1000 -m 2750 data/apk-secret
 ```
 
-`COMPOSE_FILE=compose.yaml:compose.aniyomi.yaml`로 설정한다. 앱 UID 1000과 worker UID 10001이 모두 token을 읽어야 한다. 공유 그룹 또는 ACL로 앱 UID에도 읽기 권한을 준다. 예: `sudo setfacl -m u:1000:r data/apk-config/token`. 다른 파일을 쓰려면 `MOA_APK_TOKEN_FILE`을 바꾼다. worker는 호스트 포트 없이 내부 RPC만 연다. 기존 설치는 token·named volume을 새로 만들지 않는다.
+setgid 디렉터리가 새 token에 앱의 그룹 1000을 상속한다. 기존 token 파일을 이 경로로 옮기거나 token 값을 출력하지 않는다. 기본 named volume에는 수동 권한 작업이 없다. 자동 token은 재시작·이미지 교체 시 유지되므로 이 volume도 비공개 백업에 포함한다.
+
+저메모리 호스트에서 APK를 끄려면:
+
+```sh
+docker compose -f compose.yaml -f compose.no-apk.yaml up -d
+```
+
+또는 `.env`에 `COMPOSE_FILE=compose.yaml:compose.no-apk.yaml`을 설정한다. `apk` profile은 활성화하지 않는다. 앱의 APK 설정을 비우고 worker를 비활성 profile로 제외한다. 기존에 worker가 실행 중이었다면 같은 프로젝트에서 `docker compose -f compose.yaml stop moa-apk`로 먼저 중지한다. 의존성이 비활성이라는 Compose 경고는 정상이며 앱은 시작한다. APK 데이터와 설치 목록은 삭제되지 않는다. JS 확장과 로컬 미디어는 계속 사용할 수 있다. 다시 사용하려면 override를 빼고 `up -d`한다.
 
 VAAPI는 `COMPOSE_FILE`에 `:compose.vaapi.yaml`을 추가하고 `stat -c %g /dev/dri/renderD128`로 확인한 GID를 `MOA_RENDER_GID`에 넣는다. `MOA_VAAPI_DEVICE`, `MOA_DRI_PATH`, 필요하면 `LIBVA_DRIVER_NAME`을 설정한다. GPU가 없으면 기본 구성의 소프트웨어 처리를 사용한다.
 
@@ -110,3 +118,10 @@ docker compose up -d
 ```
 
 소스에서 빌드할 때는 `docker compose up -d --build`를 사용한다. 네트워크의 prebuilt 이미지를 가져오지 않으려면 `docker compose build` 후 `docker compose up -d --pull never`로 실행한다. workflow는 main push와 `v*` 태그에서 앱·인증·APK·connector 이미지를 amd64/arm64로 빌드한다. 로컬 빌드 검증과 ARM 실제 기기 검증은 별개다. 백업·운영 측정 결과를 공개 저장소에 추가하지 않는다.
+
+
+## APK 기본 포함 변경의 검증
+
+서버 160, extensions 17, subtitles 88, skip-markers 18, 인증·gateway·connector·worker Node 54개로 총 337개 테스트가 통과했다. workspace typecheck와 웹 build, 앱·인증·APK·connector 이미지의 로컬 build가 통과했다. `.env` 없는 기본 구성, 기존 네 overlay와 token 파일을 유지한 합성 production 구성, APK 비활성 override의 compose 검증도 통과했다.
+
+별도 프로젝트의 기본 compose와 새 volume으로 setup → 로그인 → gateway `/api/me` → `/api/admin/apk/status`의 `available=true`를 확인했다. 앱 bridge에서 worker에 전달한 작은 로컬 fixture index의 파싱, token UID/GID/mode, worker 재시작 후 기존 token 재사용도 확인했다. 외부 저장소·APK를 다운로드하지 않았고 JVM을 시작하지 않았다. 테스트 stack은 `down -v`로 제거했다. production 설정·데이터·배포는 변경하지 않았다.

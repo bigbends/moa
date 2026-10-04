@@ -6,12 +6,17 @@ services:
     init: true
     environment:
       MOA_REQUIRE_ACCOUNT: "1"
+      MOA_APK_URL: http://moa-apk:8797
+      MOA_APK_SECRET_FILE: /run/moa-apk/token
       MOA_CONNECTOR_URL: http://moa-gateway:8798
       MOA_CONNECTOR_SECRET_FILE: /run/moa-connector/token
       MOA_MAX_TRANSCODES: "${MOA_MAX_TRANSCODES:-2}"
       MOA_TMDB_TOKEN: ${MOA_TMDB_TOKEN:-}
       MOA_TMDB_API_KEY: ${MOA_TMDB_API_KEY:-}
+    depends_on:
+      moa-apk: {condition: service_healthy}
     volumes:
+      - ${MOA_APK_SECRET_PATH:-moa-apk-secret}:/run/moa-apk:ro
       - ${MOA_CONNECTOR_SECRET_PATH:-moa-connector-secret}:/run/moa-connector:ro
       - ${MOA_DATA_PATH:-moa-data}:/data
       - ${MEDIA_PATH:-moa-media}:${MEDIA_CONTAINER_PATH:-/media/library}:ro
@@ -76,7 +81,43 @@ services:
     logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
     # No host port, Docker socket, TUN device, or NET_ADMIN capability.
 
+  moa-apk:
+    image: ghcr.io/sidetool/moa-apk:${MOA_VERSION:-latest}
+    pull_policy: always
+    build:
+      context: .
+      dockerfile: deploy/aniyomi/Dockerfile
+    command: [node, server.mjs]
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    cpus: 2
+    pids_limit: 192
+    tmpfs: ["/tmp:rw,size=128m"]
+    volumes:
+      - moa-apk-data:/data
+      - ${MOA_APK_SECRET_PATH:-moa-apk-secret}:/run/moa-apk
+    environment:
+      MOA_APK_SECRET_FILE: /run/moa-apk/token
+      MOA_APK_GENERATE_SECRET: "1"
+    restart: unless-stopped
+    logging: {driver: json-file, options: {max-size: 10m, max-file: '3'}}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "const fs=require('node:fs');fetch('http://127.0.0.1:8797/rpc',{method:'POST',headers:{Authorization:'Bearer '+fs.readFileSync(process.env.MOA_APK_SECRET_FILE,'utf8').trim(),'Content-Type':'application/json'},body:JSON.stringify({method:'status'})}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    # No host port and no gateway/tunnel route. MOA is the only API client.
 volumes:
+  moa-apk-data:
+  moa-apk-secret:
   moa-data:
   moa-auth-config:
   moa-auth-data:

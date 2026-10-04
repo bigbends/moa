@@ -79,6 +79,8 @@ Linux는 Docker Engine과 Compose 플러그인, macOS·Windows는 Docker Desktop
    ```
 
 2. 로그의 `Setup code`를 확인합니다. 브라우저에서 `http://localhost:8796`(다른 기기는 `http://서버의-LAN-IP:8796`)을 열고 코드를 입력한 뒤 관리자 계정을 만듭니다.
+APK 실행 환경도 기본 포함되며 토큰 파일이나 추가 compose 설정은 필요 없습니다.
+
 3. 설정에서 사용할 소스와 로컬 라이브러리를 추가합니다. 기본 확장 저장소는 없습니다. 내 영상 폴더 연결, TMDB 키, APK 확장, HTTPS와 업그레이드는 [배포 문서](docs/DEPLOYMENT.md)를 보세요.
 
 설정 코드는 `docker compose exec moa-auth moa-setup-code`로 다시 확인할 수 있습니다. 데이터와 계정은 Docker volume에 보관합니다. gateway 포트 `8796`은 LAN에 열리고, 앱 포트 `8795`는 호스트에 열리지 않으며 모든 접속은 로그인 gateway를 거칩니다. 설정 → 원격 접속에서 Cloudflare 또는 Tailscale 주소와 QR을 만들 수 있습니다([원격 접속 안내](docs/REMOTE-ACCESS.md)).
@@ -90,7 +92,7 @@ MOA에는 **기본 확장 저장소가 없습니다.** 설정 → 소스에서 �
 | 형식 | 저장소 파일 | 실행 방식 |
 |---|---|---|
 | Mangayomi JS | `index.min.json` / `anime_index.json` | 서버 안의 격리된 JS 런타임 |
-| Aniyomi APK | `index.min.json` | 별도 컨테이너의 APK 브리지 (선택) |
+| Aniyomi APK | `index.min.json` | 기본 포함된 별도 컨테이너의 APK 브리지 |
 
 지원하는 형식과 동작 방식은 [확장 문서](docs/EXTENSIONS.md)에 있습니다. 특정 사이트나 확장 저장소를 추가하는 PR은 받지 않습니다.
 

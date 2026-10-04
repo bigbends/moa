@@ -1,10 +1,10 @@
-import { readFile } from 'node:fs/promises';
+import { loadSecret } from './secret.mjs';
 import { resolve } from 'node:path';
 import { createJavaTools } from './java-tools.mjs';
 import { Runtime } from './runtime.mjs';
 import { createBridgeServer } from './http.mjs';
 
-const secret = (await readFile(process.env.MOA_APK_SECRET_FILE || '/run/secrets/apk-token', 'utf8')).trim();
+const secret = await loadSecret(process.env.MOA_APK_SECRET_FILE || '/run/secrets/apk-token', process.env.MOA_APK_GENERATE_SECRET === '1');
 const runtime = await new Runtime(process.env.MOA_APK_DATA || '/data', await createJavaTools(resolve('build'))).open();
 const server = createBridgeServer(runtime, secret);
 server.listen(Number(process.env.MOA_APK_PORT || 8797), '0.0.0.0');
