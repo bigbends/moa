@@ -79,7 +79,7 @@ const router = createBrowserRouter([
       { path: "/my-list", element: <MyListPage /> },
       { path: "/history", element: <HistoryPage /> },
       { path: "/sources", element: <RequireAdmin><SourcesPage /></RequireAdmin> },
-      { path: "/sources/:id", element: <RequireAdmin><SourceBrowsePage /></RequireAdmin> },
+      { path: "/sources/:id", element: <SourceBrowsePage /> },
       { path: "/library", element: <RequireAdmin><LibraryPage /></RequireAdmin> },
       { path: "/remote-access", element: <RequireAdmin><RemoteAccessPage /></RequireAdmin> },
       { path: "/accounts", element: <AccountsPage /> },

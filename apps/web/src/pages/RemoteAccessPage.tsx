@@ -12,9 +12,9 @@ type Choice = 'cloudflare-quick' | 'tailscale-funnel' | 'cloudflare-token' | 'ta
 const statusKey = ['remote-access'] as const;
 
 const MODES: { choice: Choice; mode: Exclude<RemoteAccessMode, 'off'>; funnel: boolean; title: string; via: string; body: string; public: boolean }[] = [
-  { choice: 'tailscale-funnel', mode: 'tailscale', funnel: true, title: '고정 주소로 공개', via: 'Tailscale Funnel', public: true, body: '서버에서 Tailscale에 한 번 로그인하면 바뀌지 않는 주소가 생겨요. 보는 사람은 아무것도 설치하지 않아도 돼요.' },
   { choice: 'cloudflare-quick', mode: 'cloudflare-quick', funnel: false, title: '빠른 연결', via: 'Cloudflare · 계정 없이', public: true, body: '버튼 하나로 임시 주소를 만들어요. 서버를 다시 켜면 주소가 바뀌어서 써 보기에 좋아요.' },
-  { choice: 'cloudflare-token', mode: 'cloudflare-token', funnel: false, title: '내 도메인으로 연결', via: 'Cloudflare Tunnel', public: true, body: '내 도메인을 고정 주소로 써요. Cloudflare 계정과 도메인이 필요해요.' },
+  { choice: 'cloudflare-token', mode: 'cloudflare-token', funnel: false, title: '내 도메인으로 연결', via: 'Cloudflare Tunnel · 추천', public: true, body: '내 도메인을 고정 주소로 써요. 속도 제한이 없어 오래 쓰기에 가장 좋아요. Cloudflare 계정과 도메인이 필요해요.' },
+  { choice: 'tailscale-funnel', mode: 'tailscale', funnel: true, title: '고정 주소로 공개', via: 'Tailscale Funnel', public: true, body: '서버에서 Tailscale에 한 번 로그인하면 바뀌지 않는 주소가 생겨요. 다만 Funnel은 속도 제한이 있어서 영상이나 표지가 느리게 뜰 수 있어요.' },
   { choice: 'tailscale', mode: 'tailscale', funnel: false, title: '내 기기에서만', via: 'Tailscale', public: false, body: '인터넷에 공개하지 않아요. 보는 기기마다 Tailscale 앱을 설치하고 같은 계정으로 로그인해야 열려요.' }
 ];
 const choiceOf = (mode: RemoteAccessMode, funnel: boolean): Choice | null => mode === 'off' ? null : mode === 'tailscale' ? (funnel ? 'tailscale-funnel' : 'tailscale') : mode;
@@ -117,7 +117,7 @@ export function RemoteAccessPage() {
   const [error, setError] = useState('');
 
   const saved = s ? choiceOf(s.config.mode, s.config.funnel) : null;
-  const current: Choice = picked ?? saved ?? 'tailscale-funnel';
+  const current: Choice = picked ?? saved ?? 'cloudflare-quick';
   const choice = byChoice(current);
   const host = hostname ?? s?.config.publicHostname ?? '';
   const running = !!s?.desiredEnabled;

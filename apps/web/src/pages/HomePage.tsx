@@ -2,7 +2,7 @@ import { TabFeed, useTabFeed } from '../components/GroupedFeed';
 import { Settings2 } from "lucide-react";
 import { Link, NavLink, useParams, useSearchParams } from "react-router-dom";
 import type { MediaType } from "@moa/shared";
-import { useHome, useMediaList } from "../api/queries";
+import { useHome, useMe, useMediaList } from "../api/queries";
 import { Hero, HeroSkeleton } from "../components/Hero";
 import { Row, RowSkeleton } from "../components/Row";
 import { PosterCard } from "../components/Cards";
@@ -11,6 +11,7 @@ import { TYPE_LABEL, cx } from "../lib/format";
 import { useNavigation, tabPath } from "../lib/navigation";
 
 export function HomePage({ localOnly = false }: { localOnly?: boolean }) {
+  const admin = useMe().data?.role === "admin";
   const { tabId = 'home' } = useParams();
   const [params] = useSearchParams();
   const { tabs, sources, pending, error } = useNavigation();
@@ -36,8 +37,8 @@ export function HomePage({ localOnly = false }: { localOnly?: boolean }) {
         {!providers.length && !rows.length && !home.isPending && !error && <EmptyState icon={<Settings2 size={40} />} title="이 탭에 표시할 소스가 없어요" body="영상 소스나 로컬 라이브러리를 이 탭에 연결해 주세요." action={<ButtonLink variant="primary" to={`/settings/tabs?edit=${encodeURIComponent(tab.id)}`}>탭 편집</ButtonLink>} />}
         {rows.map((row, i) => <Row key={row.id} row={row} index={i} />)}
         {!!installed.length && <TabFeed feed={feed} startIndex={rows.length} />}
-        {tab.includeLocal && !installed.length && !home.isPending && !home.isError && !rows.length && <EmptyState title="로컬 라이브러리가 비어 있어요" body="영상 폴더를 추가하면 자동으로 정리해 줍니다." action={<ButtonLink variant="primary" to="/library">영상 폴더 추가</ButtonLink>} />}
-        {tab.includeLocal && rows.length > 0 && <p className="feed-note"><Link to="/library">로컬 영상 폴더 관리</Link></p>}
+        {tab.includeLocal && !installed.length && !home.isPending && !home.isError && !rows.length && <EmptyState title="로컬 라이브러리가 비어 있어요" body={admin ? "영상 폴더를 추가하면 자동으로 정리해 줍니다." : "관리자가 영상 폴더를 추가하면 여기에 보여요."} action={admin ? <ButtonLink variant="primary" to="/library">영상 폴더 추가</ButtonLink> : undefined} />}
+        {admin && tab.includeLocal && rows.length > 0 && <p className="feed-note"><Link to="/library">로컬 영상 폴더 관리</Link></p>}
         {home.isError && tab.includeLocal && <p className="feed-note">로컬 라이브러리를 불러오지 못했어요. <button className="text-btn" onClick={() => void home.refetch()}>다시 시도</button></p>}
       </>}
     </div>

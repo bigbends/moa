@@ -84,6 +84,7 @@ export function NavigationSettings() {
 }
 
 function TabEditor({ tab, isNew, isHome, sources, onSave, onDelete, onClose }: { tab: NavigationTab; isNew: boolean; isHome: boolean; sources: VideoSource[]; onSave: (tab: NavigationTab) => void; onDelete: (tab: NavigationTab) => void; onClose: () => void }) {
+  const admin = useMe().data?.role === 'admin';
   const [draft, setDraft] = useState(tab);
   const [advanced, setAdvanced] = useState<string | null>(null);
   const name = useRef<HTMLInputElement>(null);
@@ -130,7 +131,7 @@ function TabEditor({ tab, isNew, isHome, sources, onSave, onDelete, onClose }: {
               </button>
             </li>
           </ul>
-          {!usable.length && <p className="settings-hint">설치한 소스가 없어요. <ButtonLink to="/sources" size="m">소스 설치</ButtonLink></p>}
+          {!usable.length && <p className="settings-hint">설치한 소스가 없어요. {admin ? <ButtonLink to="/sources" size="m">소스 설치</ButtonLink> : '관리자에게 소스 설치를 부탁해 주세요.'}</p>}
         </div>
       </div>
       <footer className="sheet-foot">
