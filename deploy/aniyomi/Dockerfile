@@ -1,4 +1,5 @@
-FROM maven:3.9-eclipse-temurin-21 AS build
+# Java/Kotlin bytecode and its smoke tests run natively once for all targets.
+FROM --platform=$BUILDPLATFORM maven:3.9-eclipse-temurin-21 AS build
 RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY services/aniyomi-worker/build.py services/aniyomi-worker/pom.xml services/aniyomi-worker/dependencies.lock.json ./

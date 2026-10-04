@@ -125,3 +125,16 @@ docker compose up -d
 서버 160, extensions 17, subtitles 88, skip-markers 18, 인증·gateway·connector·worker Node 54개로 총 337개 테스트가 통과했다. workspace typecheck와 웹 build, 앱·인증·APK·connector 이미지의 로컬 build가 통과했다. `.env` 없는 기본 구성, 기존 네 overlay와 token 파일을 유지한 합성 production 구성, APK 비활성 override의 compose 검증도 통과했다.
 
 별도 프로젝트의 기본 compose와 새 volume으로 setup → 로그인 → gateway `/api/me` → `/api/admin/apk/status`의 `available=true`를 확인했다. 앱 bridge에서 worker에 전달한 작은 로컬 fixture index의 파싱, token UID/GID/mode, worker 재시작 후 기존 token 재사용도 확인했다. 외부 저장소·APK를 다운로드하지 않았고 JVM을 시작하지 않았다. 테스트 stack은 `down -v`로 제거했다. production 설정·데이터·배포는 변경하지 않았다.
+
+## 다중 아키텍처 이미지 빌드
+
+CI는 계속 `linux/amd64,linux/arm64`를 발행한다. APK의 Java/Kotlin JAR와 여섯 Java smoke test는 `BUILDPLATFORM`에서 한 번 실행한다. bytecode는 두 target에서 공유하며 JRE·Node·Chromium·OS 패키지는 target 아키텍처를 사용한다. QEMU에서 Java source-file smoke를 실행하면 15초 제한에 걸릴 수 있으므로, 제한을 늘리거나 테스트를 생략하지 않고 native build stage로 분리했다.
+
+앱의 TypeScript·웹 번들도 `BUILDPLATFORM`에서 컴파일한다. 런타임 `node_modules`는 별도 target-platform stage에서 production 의존성만 설치한다. build-platform의 `node_modules`를 복사하면 arm64 Sharp/libvips 등이 깨질 수 있으므로 컴파일된 JS·웹 파일만 공유한다. 최종 이미지 build 중 Sharp PNG 생성과 서버 모듈 import를 실행해 target의 native 의존성 및 workspace 연결을 확인한다.
+
+컴파일 stage만 검증하려면 아래 명령을 사용한다. 이 stage들은 arm64 emulator 없이도 두 target 요청을 처리할 수 있다. 전체 런타임 검증에는 native ARM builder 또는 QEMU가 필요하며 `--target build`를 제거한다. 아래 명령은 registry에 push하지 않는다.
+
+```sh
+docker buildx build --platform linux/amd64,linux/arm64 --target build --output type=cacheonly -f deploy/aniyomi/Dockerfile .
+docker buildx build --platform linux/amd64,linux/arm64 --target build --output type=cacheonly .
+```
