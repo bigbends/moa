@@ -1,0 +1,734 @@
+{
+  "provenance": "Authored fictional catalog for offline tests; no recorded responses or database extracts.",
+  "sources": [
+    {
+      "id": "sample-kr",
+      "name": "Sample KR",
+      "lang": "ko",
+      "enabled": 1,
+      "type": "anime",
+      "live": 0,
+      "installed": 1
+    },
+    {
+      "id": "example-a",
+      "name": "Example Source A",
+      "lang": "ko",
+      "enabled": 1,
+      "type": "anime",
+      "live": 0,
+      "installed": 1
+    },
+    {
+      "id": "example-b",
+      "name": "Example Source B",
+      "lang": "en",
+      "enabled": 1,
+      "type": "anime",
+      "live": 0,
+      "installed": 1
+    }
+  ],
+  "media": [
+    {
+      "id": "garden-1",
+      "title": "구름 정원",
+      "type": "anime",
+      "provider": {
+        "id": "sample-kr",
+        "name": "Sample KR",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "1": 7
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9001,
+        "season": 1,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "garden-1-en",
+      "title": "Cloud Garden",
+      "type": "series",
+      "provider": {
+        "id": "example-b",
+        "name": "Example Source B",
+        "kind": "mangayomi-js",
+        "lang": "en"
+      },
+      "live": false,
+      "episodeCounts": {
+        "1": 7
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9001,
+        "season": 1,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "garden-2",
+      "title": "구름 정원 2기",
+      "type": "anime",
+      "provider": {
+        "id": "sample-kr",
+        "name": "Sample KR",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "2": 9
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9001,
+        "season": 2,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "garden-2-en",
+      "title": "Cloud Garden Season 2",
+      "type": "series",
+      "provider": {
+        "id": "example-b",
+        "name": "Example Source B",
+        "kind": "mangayomi-js",
+        "lang": "en"
+      },
+      "live": false,
+      "episodeCounts": {
+        "2": 9
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9001,
+        "season": 2,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "garden-2-duplicate",
+      "title": "구름 정원 시즌 2",
+      "type": "anime",
+      "provider": {
+        "id": "sample-kr",
+        "name": "Sample KR",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "2": 9
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9001,
+        "season": 2,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "garden-2-dub",
+      "title": "구름 정원 2기 더빙판",
+      "type": "anime",
+      "provider": {
+        "id": "example-a",
+        "name": "Example Source A",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "2": 9
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9001,
+        "season": 2,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "garden-2-sub",
+      "title": "구름 정원 2기 (자막)",
+      "type": "anime",
+      "provider": {
+        "id": "example-b",
+        "name": "Example Source B",
+        "kind": "mangayomi-js",
+        "lang": "en"
+      },
+      "live": false,
+      "episodeCounts": {
+        "2": 9
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9001,
+        "season": 2,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "garden-ova",
+      "title": "구름 정원 OVA",
+      "type": "anime",
+      "provider": {
+        "id": "example-a",
+        "name": "Example Source A",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "1": 1
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9001,
+        "season": 1,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "garden-unlinked",
+      "title": "구름 정원 2기",
+      "type": "anime",
+      "provider": {
+        "id": "example-a",
+        "name": "Example Source A",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {}
+    },
+    {
+      "id": "sky-1",
+      "title": "하늘 탐험대 1기",
+      "type": "anime",
+      "provider": {
+        "id": "sample-kr",
+        "name": "Sample KR",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "1": 4
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9002,
+        "season": 1,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "sky-2",
+      "title": "하늘 탐험대 2기",
+      "type": "anime",
+      "provider": {
+        "id": "example-a",
+        "name": "Example Source A",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "2": 5
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9002,
+        "season": 2,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "sky-3",
+      "title": "하늘 탐험대 3기",
+      "type": "anime",
+      "provider": {
+        "id": "example-a",
+        "name": "Example Source A",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "3": 8
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9002,
+        "season": 3,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "sky-3-p1",
+      "title": "하늘 탐험대 3기 파트 1",
+      "type": "anime",
+      "provider": {
+        "id": "sample-kr",
+        "name": "Sample KR",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "3": 4
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9002,
+        "season": 3,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "sky-3-p2",
+      "title": "하늘 탐험대 3기 파트 2",
+      "type": "anime",
+      "provider": {
+        "id": "example-b",
+        "name": "Example Source B",
+        "kind": "mangayomi-js",
+        "lang": "en"
+      },
+      "live": false,
+      "episodeCounts": {
+        "3": 4
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9002,
+        "season": 3,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "sky-final",
+      "title": "하늘 탐험대 파이널 시즌",
+      "type": "anime",
+      "provider": {
+        "id": "sample-kr",
+        "name": "Sample KR",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "4": 6
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9002,
+        "season": 4,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "sky-final-p2",
+      "title": "하늘 탐험대 4기 The Final Season Part 2",
+      "type": "anime",
+      "provider": {
+        "id": "example-b",
+        "name": "Example Source B",
+        "kind": "mangayomi-js",
+        "lang": "en"
+      },
+      "live": false,
+      "episodeCounts": {
+        "4": 3
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9002,
+        "season": 4,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "sky-final-p3",
+      "title": "하늘 탐험대 파이널 시즌 파트 3",
+      "type": "anime",
+      "provider": {
+        "id": "example-a",
+        "name": "Example Source A",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {}
+    },
+    {
+      "id": "sky-oad",
+      "title": "하늘 탐험대 OAD1",
+      "type": "anime",
+      "provider": {
+        "id": "example-a",
+        "name": "Example Source A",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "1": 1
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9002,
+        "season": 1,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "sky-special",
+      "title": "하늘 탐험대 특별편",
+      "type": "anime",
+      "provider": {
+        "id": "example-a",
+        "name": "Example Source A",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "1": 1
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9002,
+        "season": 1,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "guard-1",
+      "title": "달빛 수호대",
+      "type": "anime",
+      "provider": {
+        "id": "sample-kr",
+        "name": "Sample KR",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "1": 5
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9003,
+        "season": 1,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "guard-2",
+      "title": "달빛 수호대: 구름열차 편",
+      "type": "anime",
+      "provider": {
+        "id": "example-a",
+        "name": "Example Source A",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "2": 6
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9003,
+        "season": 2,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "guard-3",
+      "title": "달빛 수호대: 정원 마을 편",
+      "type": "anime",
+      "provider": {
+        "id": "example-b",
+        "name": "Example Source B",
+        "kind": "mangayomi-js",
+        "lang": "en"
+      },
+      "live": false,
+      "episodeCounts": {
+        "3": 7
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9003,
+        "season": 3,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "guard-movie",
+      "title": "극장판 달빛 수호대: 별빛성편",
+      "type": "movie",
+      "provider": {
+        "id": "example-a",
+        "name": "Example Source A",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "1": 1
+      },
+      "link": {
+        "kind": "movie",
+        "id": 9006,
+        "season": 1,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "planet-1",
+      "title": "별나라 탐험",
+      "type": "anime",
+      "provider": {
+        "id": "sample-kr",
+        "name": "Sample KR",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "1": 5
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9004,
+        "season": 1,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "planet-2",
+      "title": "별나라 탐험 2기 파트 1",
+      "type": "anime",
+      "provider": {
+        "id": "example-a",
+        "name": "Example Source A",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "2": 6
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9004,
+        "season": 2,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "planet-3",
+      "title": "별나라 탐험 3기",
+      "type": "anime",
+      "provider": {
+        "id": "example-b",
+        "name": "Example Source B",
+        "kind": "mangayomi-js",
+        "lang": "en"
+      },
+      "live": false,
+      "episodeCounts": {
+        "3": 7
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9004,
+        "season": 3,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "robot-1",
+      "title": "로봇 8",
+      "type": "anime",
+      "provider": {
+        "id": "sample-kr",
+        "name": "Sample KR",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "1": 5
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9005,
+        "season": 1,
+        "status": "auto"
+      }
+    },
+    {
+      "id": "robot-2",
+      "title": "로봇 8 2",
+      "type": "anime",
+      "provider": {
+        "id": "example-a",
+        "name": "Example Source A",
+        "kind": "mangayomi-js",
+        "lang": "ko"
+      },
+      "live": false,
+      "episodeCounts": {
+        "1": 6
+      },
+      "link": {
+        "kind": "tv",
+        "id": 9005,
+        "season": null,
+        "status": "auto"
+      }
+    }
+  ],
+  "titles": [
+    {
+      "kind": "tv",
+      "id": 9001,
+      "title": "구름 정원",
+      "originalTitle": "Cloud Garden"
+    },
+    {
+      "kind": "tv",
+      "id": 9002,
+      "title": "하늘 탐험대",
+      "originalTitle": "Sky Explorers"
+    },
+    {
+      "kind": "tv",
+      "id": 9003,
+      "title": "달빛 수호대",
+      "originalTitle": "Moonlight Guards"
+    },
+    {
+      "kind": "tv",
+      "id": 9004,
+      "title": "별나라 탐험",
+      "originalTitle": "Planet Adventure"
+    },
+    {
+      "kind": "tv",
+      "id": 9005,
+      "title": "로봇 8",
+      "originalTitle": "Robot 8"
+    },
+    {
+      "kind": "movie",
+      "id": 9006,
+      "title": "극장판 달빛 수호대: 별빛성편"
+    }
+  ],
+  "searches": [
+    {
+      "query": "구름 정원",
+      "ids": [
+        "garden-1",
+        "garden-1-en",
+        "garden-2",
+        "garden-2-en",
+        "garden-2-duplicate",
+        "garden-2-dub",
+        "garden-2-sub",
+        "garden-ova",
+        "garden-unlinked"
+      ],
+      "expectedGroups": 5,
+      "currentId": "garden-1",
+      "expectedSeasons": [
+        "s1",
+        "s2"
+      ]
+    },
+    {
+      "query": "하늘 탐험대",
+      "ids": [
+        "sky-1",
+        "sky-2",
+        "sky-3",
+        "sky-3-p1",
+        "sky-3-p2",
+        "sky-final",
+        "sky-final-p2",
+        "sky-final-p3",
+        "sky-oad",
+        "sky-special"
+      ],
+      "expectedGroups": 10,
+      "currentId": "sky-1",
+      "expectedSeasons": [
+        "s1",
+        "s2",
+        "s3",
+        "s4",
+        "s4p2",
+        "s4p3"
+      ]
+    },
+    {
+      "query": "달빛 수호대",
+      "ids": [
+        "guard-1",
+        "guard-2",
+        "guard-3",
+        "guard-movie"
+      ],
+      "expectedGroups": 4,
+      "currentId": "guard-1",
+      "expectedSeasons": [
+        "s1",
+        "s2",
+        "s3"
+      ]
+    },
+    {
+      "query": "별나라 탐험",
+      "ids": [
+        "planet-1",
+        "planet-2",
+        "planet-3"
+      ],
+      "expectedGroups": 3,
+      "currentId": "planet-1",
+      "expectedSeasons": [
+        "s1",
+        "s2p1",
+        "s3"
+      ]
+    },
+    {
+      "query": "로봇 8",
+      "ids": [
+        "robot-1",
+        "robot-2"
+      ],
+      "expectedGroups": 2,
+      "currentId": "robot-1",
+      "expectedSeasons": [
+        "s1",
+        "s2"
+      ]
+    }
+  ]
+}

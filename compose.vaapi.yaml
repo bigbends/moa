@@ -1,0 +1,10 @@
+# Optional Linux VAAPI device access; set the host render group in .env.
+services:
+  moa:
+    environment:
+      MOA_VAAPI_DEVICE: ${MOA_VAAPI_DEVICE:-/dev/dri/renderD128}
+      LIBVA_DRIVER_NAME: ${LIBVA_DRIVER_NAME:-}
+    devices:
+      - ${MOA_DRI_PATH:-/dev/dri}:/dev/dri
+    group_add:
+      - "${MOA_RENDER_GID:?Set MOA_RENDER_GID to the host render-device group}"

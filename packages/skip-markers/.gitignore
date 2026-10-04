@@ -1,0 +1,3 @@
+validation/cache/
+validation/*.log
+validation/analysis-*.json

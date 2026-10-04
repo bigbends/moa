@@ -1,0 +1,1 @@
+{"name":"moa-apk-browser","private":true, "license": "GPL-3.0-or-later","type":"module","dependencies":{"patchright":"1.61.1","socks":"2.8.10"}}

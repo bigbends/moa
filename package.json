@@ -1,0 +1,13 @@
+{
+  "name": "moa",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "packageManager": "pnpm@10.12.1",
+  "scripts": {
+    "dev:web": "corepack pnpm --filter @moa/web dev",
+    "dev:server": "corepack pnpm --filter @moa/server dev",
+    "build": "corepack pnpm -r build",
+    "typecheck": "corepack pnpm -r typecheck",
+    "test": "corepack pnpm -r test"
+  }
+}

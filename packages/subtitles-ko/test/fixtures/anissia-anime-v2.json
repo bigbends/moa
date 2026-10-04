@@ -1,0 +1,73 @@
+{
+  "별빛 학교": [
+    {
+      "animeNo": 9003,
+      "subject": "별빛 학교 3기 「별의 여행」",
+      "originalSubject": "星の学校 第3期 「星の旅」"
+    },
+    {
+      "animeNo": 9002,
+      "subject": "별빛 학교 2기 「푸른 교실」",
+      "originalSubject": "星の学校 第2期 「青い教室」"
+    },
+    {
+      "animeNo": 9004,
+      "subject": "별빛 학교 0",
+      "originalSubject": ""
+    },
+    {
+      "animeNo": 9001,
+      "subject": "별빛 학교",
+      "originalSubject": ""
+    }
+  ],
+  "숲의 여행": [
+    {
+      "animeNo": 9010,
+      "subject": "숲의 여행",
+      "originalSubject": "森の旅"
+    }
+  ],
+  "하늘 탐험대": [
+    {
+      "animeNo": 9028,
+      "subject": "극장판 하늘 탐험대: 마지막 지도",
+      "originalSubject": "劇場版 空の探検隊"
+    },
+    {
+      "animeNo": 9027,
+      "subject": "하늘 탐험대 4기 완결편",
+      "originalSubject": "空の探検隊 第4期 完結編"
+    },
+    {
+      "animeNo": 9024,
+      "subject": "하늘 탐험대 4기",
+      "originalSubject": "空の探検隊 第4期"
+    },
+    {
+      "animeNo": 9026,
+      "subject": "하늘 탐험대 크로니클",
+      "originalSubject": ""
+    },
+    {
+      "animeNo": 9023,
+      "subject": "하늘 탐험대 3기",
+      "originalSubject": "空の探検隊 第3期"
+    },
+    {
+      "animeNo": 9025,
+      "subject": "하늘 탐험대 잃어버린 지도",
+      "originalSubject": ""
+    },
+    {
+      "animeNo": 9022,
+      "subject": "하늘 탐험대 2기",
+      "originalSubject": "空の探検隊 第2期"
+    },
+    {
+      "animeNo": 9029,
+      "subject": "하늘 탐험대 OAD",
+      "originalSubject": ""
+    }
+  ]
+}

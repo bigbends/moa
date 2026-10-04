@@ -1,0 +1,7 @@
+# Copy into deploy/local/cloudflared/config.yml and supply your own values.
+tunnel: YOUR_TUNNEL_ID
+credentials-file: /etc/cloudflared/tunnel.json
+ingress:
+  - hostname: media.example.com
+    service: http://moa-gateway:8080
+  - service: http_status:404

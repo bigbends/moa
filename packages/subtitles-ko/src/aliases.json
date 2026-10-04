@@ -1,0 +1,20 @@
+[
+  { "korean": "나루토 질풍전", "aliases": ["Naruto: Shippuden", "Naruto Shippuuden", "ナルト 疾風伝", "NARUTO -ナルト- 疾風伝"] },
+  { "korean": "최애의 아이", "aliases": ["Oshi no Ko", "推しの子", "최애", "최애의아이", "오시노코"], "episodeOffsets": { "1": 0, "2": 11, "3": 24 } },
+  { "korean": "장송의 프리렌", "aliases": ["Frieren: Beyond Journey's End", "Sousou no Frieren", "葬送のフリーレン", "프리렌"] },
+  { "korean": "약사의 혼잣말", "aliases": ["The Apothecary Diaries", "Kusuriya no Hitorigoto", "薬屋のひとりごと"] },
+  { "korean": "스파이 패밀리", "aliases": ["Spy x Family", "SPY×FAMILY", "스파패"] },
+  { "korean": "단다단", "aliases": ["Dandadan", "ダンダダン"] },
+  { "korean": "귀멸의 칼날", "aliases": ["Demon Slayer", "Kimetsu no Yaiba", "鬼滅の刃", "귀칼"] },
+  { "korean": "주술회전", "aliases": ["Jujutsu Kaisen", "呪術廻戦"], "episodeOffsets": { "1": 0, "2": 24, "3": 47 }, "seasonTitles": { "2": ["주술회전 회옥", "주술회전 시부야 사변"], "3": ["주술회전 사멸회유"] } },
+  { "korean": "나의 히어로 아카데미아", "aliases": ["My Hero Academia", "Boku no Hero Academia", "僕のヒーローアカデミア", "히로아카"] },
+  { "korean": "나 혼자만 레벨업", "aliases": ["Solo Leveling", "Ore dake Level Up na Ken", "나혼렙"] },
+  { "korean": "괴수 8호", "aliases": ["Kaiju No. 8", "Kaijuu 8-gou", "怪獣8号"] },
+  { "korean": "진격의 거인", "aliases": ["Attack on Titan", "Shingeki no Kyojin", "進撃の巨人", "진격거"], "episodeOffsets": { "1": 0, "2": 25, "3": 37, "4": 59 }, "seasonTitles": { "4": ["진격의 거인 The Final Season", "진격의 거인 파이널 시즌"] } },
+  { "korean": "봇치 더 록!", "aliases": ["Bocchi the Rock!", "ぼっち・ざ・ろっく！", "봇치"] },
+  { "korean": "푸른 상자", "aliases": ["Blue Box", "Ao no Hako", "アオのハコ"] },
+  { "korean": "체인소 맨", "aliases": ["Chainsaw Man", "チェンソーマン"] },
+  { "korean": "도망을 잘 치는 도련님", "aliases": ["The Elusive Samurai", "Nige Jouzu no Wakagimi", "逃げ上手の若君"], "episodeOffsets": { "1": 0, "2": 12 } },
+  { "korean": "전생했더니 슬라임이었던 건에 대하여", "aliases": ["That Time I Got Reincarnated as a Slime", "Tensei shitara Slime Datta Ken", "転生したらスライムだった件", "전생슬"] },
+  { "korean": "무직전생 ~이세계에 갔으면 최선을 다한다~", "aliases": ["무직전생", "Mushoku Tensei", "Mushoku Tensei: Isekai Ittara Honki Dasu", "無職転生 ～異世界行ったら本気だす～"] }
+]

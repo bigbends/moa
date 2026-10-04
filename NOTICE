@@ -1,0 +1,24 @@
+MOA
+
+MOA-authored code is licensed under GPL-3.0-or-later; see LICENSE.
+Third-party material keeps its original license and copyright.
+
+Suwayomi Server v2.3.2243 selected sources: MPL-2.0 and Apache-2.0.
+Copyright (C) Contributors to the Suwayomi project (MPL source headers).
+Android Open Source Project source headers include Copyright (C) 2007, 2011,
+and 2013. Apache Software Foundation material retains its original terms.
+Tachiyomi nested notice: Copyright 2015 Javier Tomás, Apache-2.0.
+Aniyomi source API at 97414446b8a95994c72dd33c41c971a89d4d25b8: Apache-2.0.
+Original full license/copyright notices are retained under LICENSES.
+
+MOA modifies video dispatch, imports/types, network limits and proxy behavior,
+Android preference compatibility, URI storage handling, coroutine imports,
+DEX conversion, runtime scheduling and optional WebView support.
+See packages/extensions/NOTICE.md, services/aniyomi-worker/NOTICE.md and
+THIRD_PARTY_NOTICES.md for scope, exact origins and unresolved attribution.
+
+Pretendard: OFL-1.1, Copyright Kil Hyung-jin, Reserved Font Name Pretendard.
+Lucide/Feather: ISC and MIT; full copyrights retained in LICENSES/npm.
+JASSUB, rvfc-polyfill, libass/FreeType, sharp/libvips and other native/browser
+components retain their component licenses. No user-installed extension,
+repository, video or subtitle is included by default.

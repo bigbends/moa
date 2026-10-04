@@ -1,0 +1,10 @@
+<SAMI>
+<HEAD><STYLE>
+.KRCC { Name: Korean; lang: ko-KR; SAMIType: CC; }
+.ENCC { Name: English; lang: en-US; }
+</STYLE></HEAD>
+<BODY>
+<SYNC Start="1200"><P Class=KRCC>안녕하세요.<br>두 줄입니다.<P Class=ENCC>Hello.
+<SYNC Start='3450'><P Class=KRCC>&nbsp;<P Class=ENCC>English clear.
+<SYNC Start=4000><P Class=KRCC>마지막 대사 &lt;확인&gt;</P>
+</BODY></SAMI>

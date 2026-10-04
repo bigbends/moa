@@ -1,0 +1,5 @@
+MOA authentication service
+
+MOA-authored code is GPL-3.0-or-later; see LICENSE.
+The Node.js/Alpine image components retain their original notices and licenses.
+See root THIRD_PARTY_NOTICES.md for the complete project inventory.

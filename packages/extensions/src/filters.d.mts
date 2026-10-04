@@ -1,0 +1,1 @@
+export function mangayomiFilters(filters: unknown[], changes?: readonly { position: number; groupPosition?: number; value: unknown }[]): Array<{ id: string; position: number; groupPosition?: number; label: string; kind: string; options?: string[]; defaultValue?: unknown }>;
