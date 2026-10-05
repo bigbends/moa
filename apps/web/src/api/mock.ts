@@ -266,6 +266,7 @@ export function installMockApi() {
     const method = init?.method ?? "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     if (path === "/health") return json({ ok: true, version: "mock" });
+    if (path === "/admin/updates") return json({ configured: false, connected: false, state: 'idle', mode: null, current: 'unknown', latest: null, branch: null, behind: 0, ahead: 0, checkedAt: null, error: null });
     if (path === "/profiles" && method === "GET") return json(profiles);
     if (path === "/profiles" && method === "POST") { const p = { id: `p${Date.now()}`, name: body.name, color: body.color ?? "blue", kids: Boolean(body.kids), createdAt: new Date().toISOString() }; profiles = [...profiles, p]; return json(p); }
     if (path === "/home") return json(home(url.searchParams.get("type") ?? undefined));

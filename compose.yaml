@@ -1,8 +1,11 @@
 services:
   moa:
-    image: ghcr.io/sidetool/moa:${MOA_VERSION:-latest}
+    image: ghcr.io/${MOA_IMAGE_OWNER:-bigbends}/moa:${MOA_VERSION:-latest}
     pull_policy: always
-    build: .
+    build:
+      context: .
+      args:
+        MOA_REVISION: ${MOA_REVISION:-unknown}
     init: true
     environment:
       MOA_REQUIRE_ACCOUNT: "1"
@@ -33,7 +36,7 @@ services:
       start_period: 20s
       retries: 3
   moa-auth:
-    image: ghcr.io/sidetool/moa-auth:${MOA_VERSION:-latest}
+    image: ghcr.io/${MOA_IMAGE_OWNER:-bigbends}/moa-auth:${MOA_VERSION:-latest}
     pull_policy: always
     build: ./deploy/auth
     environment:
@@ -66,7 +69,7 @@ services:
 
   moa-connector:
     networks: [connector]
-    image: ghcr.io/sidetool/moa-connector:${MOA_VERSION:-latest}
+    image: ghcr.io/${MOA_IMAGE_OWNER:-bigbends}/moa-connector:${MOA_VERSION:-latest}
     pull_policy: always
     build: ./services/connector
     init: true
@@ -82,7 +85,7 @@ services:
     # No host port, Docker socket, TUN device, or NET_ADMIN capability.
 
   moa-apk:
-    image: ghcr.io/sidetool/moa-apk:${MOA_VERSION:-latest}
+    image: ghcr.io/${MOA_IMAGE_OWNER:-bigbends}/moa-apk:${MOA_VERSION:-latest}
     pull_policy: always
     build:
       context: .

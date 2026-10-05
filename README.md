@@ -69,12 +69,13 @@ MOA는 직접 운영하는 영상 스트리밍 앱입니다. 여러 확장 소�
 
 Linux는 Docker Engine과 Compose 플러그인, macOS·Windows는 Docker Desktop이 필요합니다. Windows에서는 WSL2를 켜고 Linux 컨테이너를 사용합니다.
 
-1. 저장소를 받고 실행합니다. `.env`나 별도 빌드는 필요 없습니다.
+1. 저장소를 받고 현재 브랜치의 기능을 빌드해 실행합니다.
 
    ```sh
-   git clone https://github.com/sidetool/moa.git
+   git clone --branch fix/subtitles-and-player-ui https://github.com/bigbends/moa.git
    cd moa
-   docker compose up -d
+   MOA_REVISION=$(git rev-parse HEAD) docker compose build
+   docker compose up -d --pull never
    docker compose logs moa-auth
    ```
 
@@ -99,6 +100,8 @@ MOA에는 **기본 확장 저장소가 없습니다.** 설정 → 소스에서 �
 ## 문서
 
 - [배포](docs/DEPLOYMENT.md) — Docker로 설치하기, 로그인, 외부 접속
+- [업데이트](docs/UPDATES.md) — Git·Docker 버전 확인과 관리자 업데이트
+- [TV 전송](docs/CASTING.md) — Chromecast·AirPlay 재생
 - [구조](docs/ARCHITECTURE.md) — 서버, 웹, 확장 런타임, APK 브리지
 - [개발](docs/DEVELOPMENT.md) — 로컬 실행과 테스트
 - [웹사이트 플러그인](docs/PLUGINS.md) — JavaScript 기능 확장, 자막·재생 API와 [개발 템플릿](plugins/template/README.md)

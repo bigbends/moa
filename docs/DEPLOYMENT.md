@@ -5,9 +5,10 @@ Linux는 Docker Engine과 Compose 플러그인, macOS·Windows는 Docker Desktop
 ## 새 설치
 
 ```sh
-git clone https://github.com/sidetool/moa.git
+git clone --branch fix/subtitles-and-player-ui https://github.com/bigbends/moa.git
 cd moa
-docker compose up -d
+MOA_REVISION=$(git rev-parse HEAD) docker compose build
+docker compose up -d --pull never
 docker compose logs moa-auth
 ```
 
@@ -74,6 +75,7 @@ Linux에서 `.env`의 `COMPOSE_FILE`에 콜론으로 override를 추가한다. �
 | APK 실행 환경 끄기 | `compose.no-apk.yaml` | 선택 사항, `apk` profile을 활성화하지 않음 |
 | Linux VAAPI | `compose.vaapi.yaml` | render 장치의 GID와 GPU 드라이버 |
 | Cloudflare tunnel | `compose.tunnel.yaml` | 배포자 소유 tunnel config와 credentials |
+| 웹에서 서버 업데이트 | `compose.updates.yaml` | 호스트 업데이트 도구와 상태 디렉터리 연결, [설정 안내](UPDATES.md) |
 
 ### APK 기본 구성과 기존 설치
 
@@ -112,12 +114,11 @@ TMDB 키는 관리자 API `PATCH /api/admin/tmdb/config`로 DB에 저장할 수 
 업그레이드 전 앱·인증 DB, `.env`, `deploy/local`, APK named volume과 token을 비공개로 백업한다. SQLite 파일은 일관된 backup API를 쓰거나 서비스를 멈춘 상태에서 복사하고 WAL/SHM도 고려한다. 미디어는 별도로 보존한다. 기존 설치의 `MEDIA_CONTAINER_PATH`를 바꾸면 DB에 저장된 로컬 경로가 달라질 수 있다. 공개 이미지는 main의 `latest`와 버전 태그(예: `v1.0.0`)로 배포한다. `.env`의 `MOA_VERSION`으로 네 이미지의 버전을 함께 고정할 수 있다. 최초 GHCR 발행 후 각 패키지의 공개 접근 권한을 확인해야 한다. 이미지 발행 전에는 아래 로컬 빌드 경로를 사용한다.
 
 ```sh
-git pull
-docker compose pull
-docker compose up -d
+node scripts/update.mjs check
+node scripts/update.mjs apply
 ```
 
-소스에서 빌드할 때는 `docker compose up -d --build`를 사용한다. 네트워크의 prebuilt 이미지를 가져오지 않으려면 `docker compose build` 후 `docker compose up -d --pull never`로 실행한다. workflow는 main push와 `v*` 태그에서 앱·인증·APK·connector 이미지를 amd64/arm64로 빌드한다. 로컬 빌드 검증과 ARM 실제 기기 검증은 별개다. 백업·운영 측정 결과를 공개 저장소에 추가하지 않는다.
+업데이트 도구는 현재 Git 추적 브랜치와 Docker 실행 여부를 확인한다. 웹에서 실행하려면 [업데이트 안내](UPDATES.md)에 따라 호스트 도구를 연결한다. 수동 소스 빌드는 `MOA_REVISION=$(git rev-parse HEAD) docker compose build` 후 `docker compose up -d --pull never`를 사용한다. 기본 이미지 소유자는 `bigbends`이며 `MOA_IMAGE_OWNER`로 변경할 수 있다. workflow는 main push와 `v*` 태그에서 해당 저장소 소유자의 앱·인증·APK·connector 이미지를 amd64/arm64로 빌드한다. 로컬 빌드 검증과 ARM 실제 기기 검증은 별개다. 백업·운영 측정 결과를 공개 저장소에 추가하지 않는다.
 
 
 ## APK 기본 포함 변경의 검증

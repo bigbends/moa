@@ -1,5 +1,7 @@
 import { importSubtitleFile, exportSubtitle, SUBTITLE_FILES } from '../player/subtitle-files';
 import { PluginScripts, PluginTools } from '../components/WebsitePlugins';
+import { CastButton } from '../player/CastButton';
+import type { CastMedia } from '../player/cast';
 import { checkSubtitleAlignment } from '../player/subtitle-sync';
 import { preparePlayback, retirePlayback } from '../player/session-lifecycle';
 import { subtitlesOffForTitle, rememberSubtitlesOff, subtitleOffsetForTitle, rememberSubtitleOffset, subtitlePreference, rememberSubtitle, restoreSubtitle } from "../player/subtitle-preference";
@@ -109,9 +111,11 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
   const root = useRef<HTMLDivElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   const engine = useRef<EngineHandle | null>(null);
+  const [airplayMedia, setAirplayMedia] = useState<CastMedia | null>(null);
   const subs = useRef<SubtitleController | null>(null);
   const hideTimer = useRef<number>(0);
   const lastSaved = useRef(0);
+  const castProgress = useRef<{ position: number; duration: number } | null>(null);
 
   const [playing, setPlaying] = useState(false);
   const [waiting, setWaiting] = useState(true);
@@ -164,7 +168,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
     const value = { size: subSize, background: subBackground, ...patch };
     setAppearance(value); try { localStorage.setItem('moa.subtitleAppearance', JSON.stringify(value)); } catch {}
   };
-  useEffect(() => { void subs.current?.setAppearance({size:subSize,background:subBackground}).catch(() => {}); }, [subSize,subBackground,subtitle,session]);
+  useEffect(() => { void subs.current?.setAppearance({size:subSize,background:airplayMedia ? 'original' : subBackground}).catch(() => {}); }, [subSize,subBackground,subtitle,session,airplayMedia]);
   const [extraSubs, setExtraSubs] = useState<SubtitleTrack[]>(carried?.subtitle ? [carried.subtitle] : []);
   const [importing, setImporting] = useState(false);
   const [draggingSubtitle, setDraggingSubtitle] = useState(false);
@@ -186,15 +190,18 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
   /* ---------- progress ---------- */
   const saveProgress = useCallback((keepalive = false) => {
     const v = video.current;
-    if (!session || session.live || !v || !Number.isFinite(v.duration) || !v.duration || v.currentTime < 1) return;
-    lastSaved.current = v.currentTime;
-    void api("/progress", { method: "POST", body: { episodeId: session.episodeId, position: v.currentTime, duration: v.duration || session.duration }, keepalive }).catch(() => {});
+    const position = castProgress.current?.position ?? v?.currentTime, duration = castProgress.current?.duration ?? v?.duration;
+    if (!session || session.live || position === undefined || !Number.isFinite(duration) || !duration || position < 1) return;
+    lastSaved.current = position;
+    void api("/progress", { method: "POST", body: { episodeId: session.episodeId, position, duration }, keepalive }).catch(() => {});
   }, [session]);
 
   /* ---------- attach ---------- */
   useEffect(() => {
     const v = video.current;
     if (!session || !v) return;
+    setAirplayMedia(null);
+    castProgress.current = null;
     let disposed = false;
     let advancedStream = false;
     setFatal(null); setEnded(false); setNextDismissed(false); setCountdown(null); setWaiting(true);
@@ -300,8 +307,8 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
 
   useLayoutEffect(() => {
     subOffsetRef.current = subOffset;
-    subs.current?.setOffset(subOffset);
-  }, [subOffset, session]);
+    subs.current?.setOffset(airplayMedia ? 0 : subOffset);
+  }, [subOffset, session, airplayMedia]);
 
   useEffect(() => {
     setAutoAlignment(null);
@@ -321,18 +328,19 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
   const shownTrack = useRef<{ controller: SubtitleController | null; track: SubtitleTrack | null }>({ controller: null, track: null });
   useEffect(() => {
     const controller = subs.current;
+    const track: SubtitleTrack | null = airplayMedia ? airplayMedia.subtitle ? { id: 'cast-caption', format: 'vtt', ...airplayMedia.subtitle } : null : subtitle;
     let cancelled = false;
     const previous = shownTrack.current;
-    shownTrack.current = { controller, track: subtitle };
+    shownTrack.current = { controller, track };
     // A newer revision of the same track (live AI translation) is swapped in place instead of reloaded.
-    const revision = Boolean(controller && subtitle && previous.controller === controller && previous.track?.id === subtitle.id);
-    if (revision && previous.track!.url === subtitle!.url) return;
-    const load = revision ? controller!.replace(subtitle!).catch(() => controller!.show(subtitle)) : controller?.show(subtitle);
+    const revision = Boolean(controller && track && previous.controller === controller && previous.track?.id === track.id);
+    if (revision && previous.track!.url === track!.url) return;
+    const load = revision ? controller!.replace(track!).catch(() => controller!.show(track)) : controller?.show(track);
     void load?.then(() => {
-      if (!cancelled) controller!.setOffset(subOffsetRef.current);
+      if (!cancelled) controller!.setOffset(airplayMedia ? 0 : subOffsetRef.current);
     }).catch(() => { if (!cancelled) setNotice("자막을 불러오지 못했습니다. 다른 자막을 선택해 주세요."); });
     return () => { cancelled = true; };
-  }, [subtitle, session]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [subtitle, session, airplayMedia]);
 
   useEffect(() => {
     if(!session?.streams?.length || !waiting || fatal) return;
@@ -630,7 +638,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
     setChrome(true);
     window.clearTimeout(hideTimer.current);
     hideTimer.current = window.setTimeout(() => {
-      if (!video.current?.paused && !root.current?.querySelector(".player-panel")) {
+      if (!video.current?.paused && !root.current?.querySelector(".player-panel, dialog[open]")) {
         if (isRemoteMode() && root.current?.contains(document.activeElement) && !document.activeElement?.closest(".translate-offer")) (document.activeElement as HTMLElement).blur();
         setChrome(false);
       }
@@ -1183,6 +1191,15 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
             <span className="player-time">{live ? <b className="live-label">● LIVE</b> : <>{clock(shown)} <span>/ {clock(total)}</span></>}</span>
           </div>
           <div className="controls-right">
+            {session && <CastButton key={session.sessionId} session={session} subtitle={subtitle} offset={subOffset} video={video} onProgress={value => { castProgress.current = value; }} onAirPlay={async target => {
+              const v = video.current;
+              if (!v) return;
+              const position = v.currentTime, playing = !v.paused;
+              engine.current?.destroy(); engine.current = null;
+              engine.current = await attach(v, target ? { ...session, url: target.url, mime: target.mime as PlaybackSession['mime'] } : session, position, message => setNotice(message), Boolean(target));
+              setAirplayMedia(target);
+              if (playing) await v.play().catch(() => {});
+            }} />}
             {session?.next && <button className="icon-btn icon-btn-l" aria-label="다음 화 (N)" title="다음 화 (N)" onClick={goNext}><SkipForward size={26} /></button>}
             {episodes.length > 1 && <button className={cx("icon-btn icon-btn-l", panel === "episodes" && "is-active")} aria-label="회차 목록" title="회차 목록" onClick={() => setPanel(panel === "episodes" ? null : "episodes")}><ListVideo size={26} /></button>}
             {session && (

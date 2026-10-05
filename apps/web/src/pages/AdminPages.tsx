@@ -11,6 +11,7 @@ import type { LibraryFolder, MediaType, ScanStatus, Settings } from "@moa/shared
 import { NetworkSettings } from "../components/NetworkSettings";
 import { TmdbSettings } from "../components/TmdbSettings";
 import { TranslationSettings } from "../components/TranslationSettings";
+import { UpdateSettings } from "../components/UpdateSettings";
 import { SubtitleAdvancedSettings } from "../components/SubtitleAdvancedSettings";
 import { translationModeOf, useTranslationConfig, type TranslationMode } from "../api/translation";
 import { keys, useFolders, useMe, useScanStatus, useSettings } from "../api/queries";
@@ -250,6 +251,7 @@ export function SettingsPage() {
         </div>
         <p className="settings-hint">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
       </section>
+      <UpdateSettings />
       <TranslationSettings />
       <NetworkSettings /></>}
     </div>

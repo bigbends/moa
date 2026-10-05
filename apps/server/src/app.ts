@@ -1,4 +1,6 @@
 import { registerWebsitePlugins } from './website-plugins.js';
+import { registerUpdates } from './updates.js';
+import { Casting } from './casting.js';
 import { SubtitleLibrary } from './subtitle-library.js';
 import { RemoteAccess, connectorRpc } from './remote-access.js';
 import { readFile } from 'node:fs/promises';
@@ -65,7 +67,11 @@ export async function sendFile(reply: FastifyReply, file: string, mime: string, 
 }
 export async function buildApp(overrides: Partial<Config> = {}, logger = true, services: EnrichmentOptions & { store?: Store; subtitleClient?: OnlineClient; translationFetch?: typeof fetch; jimakuFetch?: typeof fetch; tmdb?: { token?: string; key?: string; fetch?: typeof fetch } } = {}) {
   const cfg = makeConfig(overrides);
-  const app = Fastify({ logger, bodyLimit: 1024 * 1024, ajv: { customOptions: { removeAdditional: false, coerceTypes: 'array', allowUnionTypes: true } } });
+  const app = Fastify({ logger: logger ? { serializers: { req: req => {
+    let url: string;
+    try { url = decodeURIComponent(req.url).replace(/(\/cast\/)[^/?]+/g, '$1[redacted]'); } catch { url = '[invalid-url]'; }
+    return { method: req.method, url, hostname: req.hostname, remoteAddress: req.ip, remotePort: req.socket?.remotePort };
+  } } } : false, bodyLimit: 1024 * 1024, ajv: { customOptions: { removeAdditional: false, coerceTypes: 'array', allowUnionTypes: true } } });
   const db = services.store ?? new Store(cfg.dataDir), catalog = new Catalog(db);
   const pins = new ProfilePins(db);
   const sources = new Sources(db, catalog);
@@ -98,6 +104,7 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
   const enrichment = new Enrichment(db, cfg, online, value => app.log.info(value), services);
   const library = new Library(db, cfg, message => app.log.warn(message), () => enrichment.schedule());
   const playback = new Playback(db, catalog, cfg, value => app.log.info(value), online, enrichment);
+  const casting = new Casting(db, (id, profile) => remotePlayback.sessions.has(id) ? remotePlayback.get(id, profile) : playback.get(id, profile));
   /** Give TMDB a moment to link new titles so first visits already show its artwork. */
   const withMetadata = async <T extends { items: { id: string }[] }>(page: T, profileId: string): Promise<T> => {
     const unlinked = page.items.map(c => c.id).filter(id => !db.get('SELECT 1 FROM tmdb_links WHERE media_id=?', id));
@@ -118,6 +125,7 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
     // The router decodes static path segments; authorize its matched route, not the raw URL.
     const url = req.routeOptions.url ?? req.url.split('?')[0];
     if (!url.startsWith('/api/') || url === '/api/health') return;
+    if (url.startsWith('/api/cast/') && ['GET', 'HEAD', 'OPTIONS'].includes(req.method)) { casting.authorize(req); return; }
     const id = req.headers['x-moa-account'], role = req.headers['x-moa-role'];
     if (id === undefined && role === undefined && !cfg.requireAccount) req.moaAccount = { id: 'local', username: 'local', role: 'admin' };
     else {
@@ -152,6 +160,8 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
     }
   });
   registerWebsitePlugins(app, db);
+  registerUpdates(app);
+  casting.register(app);
   app.get('/api/admin/apk/status', async (_req, reply) => reply.header('Cache-Control', 'private, no-store').send(await sources.apk.status()));
   app.get('/api/admin/tmdb/config', async (_req, reply) => reply.header('Cache-Control', 'private, no-store').send(tmdb.status()));
   app.patch('/api/admin/tmdb/config', { schema: { body: object({
@@ -423,17 +433,17 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
     if (online.removeAsset(params(req).sessionId, profile(req))) return reply.code(204).send();
     playback.get(params(req).sessionId, profile(req)); await playback.remove(params(req).sessionId); return reply.code(204).send();
   });
-  app.get('/api/playback/:sessionId/remote/:asset', async (req, reply) => remotePlayback.proxy(req, reply, params(req).sessionId, params(req).asset));
+  casting.asset(app, '/api/playback/:sessionId/remote/:asset', async (req, reply) => remotePlayback.proxy(req, reply, params(req).sessionId, params(req).asset));
   const session = (req: FastifyRequest) => playback.get(params(req).sessionId, req.moaProfile);
-  app.get('/api/playback/:sessionId/index.m3u8', async (req, reply) => {
+  casting.asset(app, '/api/playback/:sessionId/index.m3u8', async (req, reply) => {
     const s = session(req); if (s.response.mode === 'direct') throw new ApiFailure(404, 'not-hls');
     return reply.type('application/vnd.apple.mpegurl').header('Cache-Control', 'no-store').send(playback.playlist(s));
   });
-  app.get('/api/playback/:sessionId/original', async (req, reply) => {
+  casting.asset(app, '/api/playback/:sessionId/original', async (req, reply) => {
     const s = session(req); if (s.response.mode !== 'direct') throw new ApiFailure(404, 'not-direct');
     const safe = await safePath(cfg.mediaRoot, s.file); return sendFile(reply, safe, s.response.mime, req.headers.range);
   });
-  app.get('/api/playback/:sessionId/:asset', async (req, reply) => {
+  casting.asset(app, '/api/playback/:sessionId/:asset', async (req, reply) => {
     const s = session(req), asset = params(req).asset, match = /^(seg-(\d+)\.m4s|init\.mp4)$/.exec(asset);
     if (!match || s.response.mode === 'direct') throw new ApiFailure(404, 'not-found');
     const file = asset === 'init.mp4' ? await playback.initialization(s) : await playback.segment(s, Number(match[2]));

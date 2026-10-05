@@ -446,6 +446,14 @@ export interface SourceRemovalResult { removedIds: string[]; impact: SourceRemov
 export interface DefaultNavigation { navigation: NavigationTab[] | null }
 export type DefaultNavigationUpdate = DefaultNavigation | { fromProfile: true };
 
+export interface UpdateStatus {
+  configured: boolean; connected: boolean;
+  state: 'idle' | 'checking' | 'updating' | 'current' | 'available' | 'blocked' | 'failed' | 'restart-required';
+  mode: 'git' | 'docker' | null;
+  current: string; latest: string | null; branch: string | null;
+  behind: number; ahead: number; checkedAt: number | null; error: string | null;
+}
+
 /* ---------- Gemini subtitle translation ---------- */
 export interface TranslationConfig { provider: "gemini" | "openai"; baseUrl: string; configured: boolean; enabled: boolean; model: string; batchSize: number; requestIntervalMs: number; retryCount: number; keys: { id: string; label: string; test?: { ok: boolean; error?: string } }[] }
 export interface TranslationJob {

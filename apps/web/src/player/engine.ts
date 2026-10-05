@@ -36,12 +36,12 @@ export interface EngineHandle {
 export type FatalHandler = (message: string) => void;
 
 /** Attach a playback session to a <video>. hls.js is loaded only when needed. */
-export async function attach(video: HTMLVideoElement, session: PlaybackSession, start: number, onFatal: FatalHandler): Promise<EngineHandle> {
+export async function attach(video: HTMLVideoElement, session: PlaybackSession, start: number, onFatal: FatalHandler, native = false): Promise<EngineHandle> {
   const isHls = session.mime === "application/vnd.apple.mpegurl" || /\.m3u8(\?|$)/.test(session.url);
   const nativeError = () => onFatal("영상 데이터를 재생하지 못했습니다.");
   const noop: EngineHandle = { destroy() { video.removeEventListener("error",nativeError); video.removeAttribute("src"); video.load(); }, levels: () => [], setLevel() {} };
 
-  if (!isHls || (!(await hlsSupported()) && video.canPlayType("application/vnd.apple.mpegurl"))) {
+  if (native || !isHls || (!(await hlsSupported()) && video.canPlayType("application/vnd.apple.mpegurl"))) {
     video.addEventListener("error",nativeError);
     video.src = start > 0 ? `${session.url}#t=${start}` : session.url;
     return noop;

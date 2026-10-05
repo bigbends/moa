@@ -30,6 +30,7 @@ try {
       if (path.endsWith('/translation/config')) return route.fulfill({ json: config });
       if (path === '/api/network') return route.fulfill({ json: { defaultProxy: '', revision: 0 } });
       if (path === '/api/admin/tmdb/config') return route.fulfill({ json: { configured: false } });
+      if (path === '/api/admin/updates') return route.fulfill({ json: { configured: false, connected: false, current: 'unknown', state: 'idle' } });
       if (path === '/api/admin/default-navigation') return route.fulfill({ json: { navigation: null } });
       if (path === '/__moa/api/accounts') return route.fulfill({ json: [{ id: 'admin', username: '테스트', role: 'admin', lastLoginAt: new Date().toISOString() }] });
       return route.fulfill({ json: [] });
