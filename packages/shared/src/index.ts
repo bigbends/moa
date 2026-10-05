@@ -210,11 +210,13 @@ export interface WebsitePlugin {
   version: string;
   description: string;
   placements: Array<'settings' | 'player'>;
-  permissions: Array<'player.context' | 'subtitles.import'>;
+  permissions: Array<'player.context' | 'player.control' | 'subtitles.import' | 'storage' | 'notifications'>;
+  kind: 'html' | 'script';
+  actions?: Array<{ id: string; label: string }>;
   connect: string[];
   enabled: boolean;
 }
-export interface WebsitePluginPackage extends Omit<WebsitePlugin, 'enabled' | 'revision'> { html: string }
+export interface WebsitePluginPackage extends Omit<WebsitePlugin, 'enabled' | 'revision' | 'kind'> { html?: string; script?: string }
 
 export interface SubtitleTrack {
   id: string;

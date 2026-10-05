@@ -7,12 +7,13 @@ import { ApiFailure, hash } from './util.js';
 export function pluginPackage(value: unknown): WebsitePluginPackage {
   const p = value as WebsitePluginPackage;
   const list = (items: unknown, allowed: string[]) => Array.isArray(items) && items.length <= allowed.length && new Set(items).size === items.length && items.every(item => allowed.includes(item));
-  if (!p || typeof p !== 'object' || Object.keys(p).some(key => !['apiVersion', 'id', 'name', 'version', 'description', 'placements', 'permissions', 'connect', 'html'].includes(key)) ||
+  if (!p || typeof p !== 'object' || Object.keys(p).some(key => !['apiVersion', 'id', 'name', 'version', 'description', 'placements', 'permissions', 'connect', 'html', 'script', 'actions'].includes(key)) ||
     p.apiVersion !== 1 || typeof p.id !== 'string' || !/^[a-z][a-z0-9-]{1,63}$/.test(p.id) || typeof p.name !== 'string' || !p.name.trim() || p.name.length > 80 ||
     typeof p.version !== 'string' || !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/.test(p.version) || p.version.length > 40 ||
     typeof p.description !== 'string' || p.description.length > 500 || !list(p.placements, ['settings', 'player']) || !p.placements.length ||
-    !list(p.permissions, ['player.context', 'subtitles.import']) || !Array.isArray(p.connect) || p.connect.length > 10 || new Set(p.connect).size !== p.connect.length ||
-    typeof p.html !== 'string' || !p.html.trim() || Buffer.byteLength(p.html) > 200 * 1024) throw new ApiFailure(400, 'invalid-plugin');
+    !list(p.permissions, ['player.context', 'player.control', 'subtitles.import', 'storage', 'notifications']) || !Array.isArray(p.connect) || p.connect.length > 10 || new Set(p.connect).size !== p.connect.length ||
+    (p.html !== undefined && typeof p.html !== 'string') || (p.script !== undefined && typeof p.script !== 'string') || (typeof p.html === 'string') === (typeof p.script === 'string') || typeof (p.html ?? p.script) !== 'string' || !(p.html ?? p.script)!.trim() || Buffer.byteLength((p.html ?? p.script)!) > 200 * 1024 ||
+    p.actions !== undefined && (!p.script || !Array.isArray(p.actions) || p.actions.length > 8 || new Set(p.actions.map(action => action?.id)).size !== p.actions.length || p.actions.some(action => !action || Object.keys(action).some(key => !['id', 'label'].includes(key)) || typeof action.id !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(action.id) || typeof action.label !== 'string' || !action.label.trim() || action.label.length > 60))) throw new ApiFailure(400, 'invalid-plugin');
   for (const origin of p.connect) {
     try {
       const url = new URL(origin);
@@ -23,8 +24,8 @@ export function pluginPackage(value: unknown): WebsitePluginPackage {
 }
 
 export function registerWebsitePlugins(app: FastifyInstance, db: Store) {
-  db.db.exec('CREATE TABLE IF NOT EXISTS website_plugins(id TEXT PRIMARY KEY,package TEXT NOT NULL,enabled INTEGER NOT NULL)');
-  const metadata = (row: Record<string, any>): WebsitePlugin => { const { html, ...p } = JSON.parse(row.package) as WebsitePluginPackage; return { ...p, revision: hash(row.package), enabled: Boolean(row.enabled) }; };
+  db.db.exec('CREATE TABLE IF NOT EXISTS website_plugins(id TEXT PRIMARY KEY,package TEXT NOT NULL,enabled INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS website_plugin_data(plugin_id TEXT REFERENCES website_plugins(id) ON DELETE CASCADE,profile_id TEXT REFERENCES profiles(id) ON DELETE CASCADE,value TEXT NOT NULL,PRIMARY KEY(plugin_id,profile_id))');
+  const metadata = (row: Record<string, any>): WebsitePlugin => { const { html, script, ...p } = JSON.parse(row.package) as WebsitePluginPackage; return { ...p, kind: script === undefined ? 'html' : 'script', revision: hash(row.package), enabled: Boolean(row.enabled) }; };
   const get = (id: string, enabled = true) => {
     const row = db.get('SELECT * FROM website_plugins WHERE id=?', id);
     if (!row || enabled && !row.enabled) throw new ApiFailure(404, 'plugin-not-found');
@@ -46,6 +47,18 @@ export function registerWebsitePlugins(app: FastifyInstance, db: Store) {
     return metadata(get(id, false));
   });
   app.delete('/api/admin/plugins/:id', async (req, reply) => { db.run('DELETE FROM website_plugins WHERE id=?', (req.params as { id: string }).id); return reply.code(204).send(); });
+  app.post('/api/plugins/:id/storage', { bodyLimit: 20 * 1024, schema: { body: { type: 'object', additionalProperties: false, required: ['revision'], properties: { revision: { type: 'string', pattern: '^[a-f0-9]{32}$' }, value: { type: 'object', maxProperties: 128 } } } } }, async req => {
+    const id = (req.params as { id: string }).id, row = get(id), p = JSON.parse(row.package) as WebsitePluginPackage;
+    const body = req.body as { revision: string; value?: Record<string, unknown> };
+    if (body.revision !== hash(row.package)) throw new ApiFailure(409, 'plugin-updated');
+    if (!p.permissions.includes('storage')) throw new ApiFailure(403, 'plugin-permission-denied');
+    if (body.value !== undefined) {
+      const value = JSON.stringify(body.value);
+      if (Buffer.byteLength(value) > 16 * 1024) throw new ApiFailure(413, 'plugin-storage-too-large');
+      db.run('INSERT INTO website_plugin_data VALUES(?,?,?) ON CONFLICT(plugin_id,profile_id) DO UPDATE SET value=excluded.value', id, req.moaProfile!, value);
+    }
+    return JSON.parse(db.get('SELECT value FROM website_plugin_data WHERE plugin_id=? AND profile_id=?', id, req.moaProfile!)?.value || '{}');
+  });
   app.post('/api/plugins/:id/request', { schema: { body: { type: 'object', additionalProperties: false, required: ['url', 'revision'], properties: { url: { type: 'string', maxLength: 2048 }, revision: { type: 'string', pattern: '^[a-f0-9]{32}$' } } } } }, async req => {
     const id = (req.params as { id: string }).id, row = get(id), p = JSON.parse(row.package) as WebsitePluginPackage;
     const { url: raw, revision } = req.body as { url: string; revision: string };

@@ -6,7 +6,22 @@ import { join } from 'node:path';
 import { RemotePlayback } from '../src/remote-playback.js';
 import { ApiFailure } from '../src/util.js';
 import { buildApp } from '../src/app.js';
+import Fastify from 'fastify';
+import { Readable } from 'node:stream';
+import iconv from 'iconv-lite';
 const state=(profile:string,now:number,lease?:string):any=>({profile,touched:now,apkLease:lease,renewAt:now+45_000,abort:new AbortController(),assets:new Map(),reverse:new Map(),response:{episodeId:'episode'}});
+
+test('proxied subtitle bytes preserve CP949, UTF-16 and declared Shift_JIS before SRT conversion', async () => {
+  for (const [encoding, text, charset] of [['cp949', '한글 기호 → ★', ''], ['utf16le', '한글 ｢日本語｣', ''], ['shift_jis', '｢日本語の字幕｣', '; charset=Shift_JIS']]) {
+    const content = `1\n00:00:01,000 --> 00:00:03,000\n${text}\n`;
+    const transport = async () => ({ url: 'https://cdn.example.test/sub.srt', response: Object.assign(Readable.from([iconv.encode(content, encoding)]), { statusCode: 200, headers: { 'content-type': `text/plain${charset}` } }) });
+    const remote = new RemotePlayback(null as any, null as any, {} as any, transport as any);
+    const session = state('p', Date.now()); session.assets.set('sub', { url: 'https://cdn.example.test/sub.srt', headers: {}, subtitle: 'vtt' }); remote.sessions.set('s', session);
+    const app = Fastify(); app.get('/subtitle', (req, reply) => remote.proxy(req, reply, 's', 'sub'));
+    try { const response = await app.inject('/subtitle'); assert.equal(response.statusCode, 200, response.body); assert.match(response.body, /^WEBVTT/); assert.ok(response.body.includes(text), encoding); }
+    finally { await app.close(); remote.close(); }
+  }
+});
 
 test('runtime heartbeats retain paused playback, abandoned sessions expire quickly, public sessions keep their old lifetime',async()=>{
  let now=1000;const released:string[]=[],renewed:string[]=[];

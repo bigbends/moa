@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { publicStream, type SourceVideo } from '@moa/extensions';
 import type { PlaybackSession, SubtitleTrack } from '@moa/shared';
+import { decodeSubtitleBuffer } from '@moa/subtitles-ko';
 import { Store } from './db.js';
 import { Catalog } from './catalog.js';
 import { Sources } from './sources.js';
@@ -162,7 +163,8 @@ export class RemotePlayback {
       try {
         const chunks: Buffer[] = []; let size = 0;
         for await (const chunk of response) { size += chunk.length; if (size > (playlist ? 2 : 8) * 1024 * 1024) throw new Error('asset-limit'); chunks.push(Buffer.from(chunk)); }
-        let body = Buffer.concat(chunks).toString('utf8');
+        const buffer = Buffer.concat(chunks);
+        let body = asset.subtitle ? decodeSubtitleBuffer(buffer, type.match(/charset=["']?([^\s;"']+)/i)?.[1]) : buffer.toString('utf8');
         if (playlist) body = rewritePlaylist(body,url,target => {
           const headers = { ...asset.headers };
           if (new URL(target).origin !== new URL(asset.url).origin) { for (const key of Object.keys(headers)) if (/^(authorization|cookie)$/i.test(key)) delete headers[key]; }

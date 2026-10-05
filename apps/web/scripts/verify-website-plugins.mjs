@@ -14,12 +14,37 @@ const env = await buildApp({ dataDir: directory, mediaRoot: directory }, false);
 await env.app.listen({ host: '127.0.0.1', port: 0 });
 process.env.MOA_API = `http://127.0.0.1:${env.app.server.address().port}`;
 process.env.VITE_MOCK = '0';
-const web = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), logLevel: 'error', server: { port: 0, open: false } });
+const web = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), logLevel: 'error', server: { port: 0, open: false, hmr: false } });
 await web.listen();
 const browser = await chromium.launch({ executablePath: process.env.MOA_BROWSER_EXECUTABLE, args: ['--autoplay-policy=no-user-gesture-required'] });
 const errors = [];
-const manifest = JSON.parse(await readFile(new URL('../../../plugins/template/manifest.json', import.meta.url), 'utf8'));
-const html = await readFile(new URL('../../../plugins/template/index.html', import.meta.url), 'utf8');
+const manifest = JSON.parse(await readFile(new URL('../../../plugins/template/examples/subtitle-helper/manifest.json', import.meta.url), 'utf8'));
+const html = await readFile(new URL('../../../plugins/template/examples/subtitle-helper/index.html', import.meta.url), 'utf8');
+const script = { apiVersion: 1, id: 'script-test', name: '자동 JS 검증', version: '1.0.0', description: '자동 실행과 책갈피 검증', placements: ['settings', 'player'], permissions: ['storage', 'notifications', 'player.context', 'player.control'], connect: [], actions: [{ id: 'mark', label: '책갈피 저장' }, { id: 'play', label: '책갈피 재생' }, { id: 'pause', label: '플러그인 일시정지' }], script: `
+  window.scriptText = '</script>';
+  if (1 < 2) window.comparison = true;
+  window.updates = [];
+  moa.on('ready', async context => {
+    window.initialContext = context;
+    const saved = await moa.storage.get();
+    await moa.storage.set({ ...saved, ready: (saved.ready || 0) + 1 });
+    await moa.notify(context ? '재생 자동 실행됨' : '설정 자동 실행됨');
+  });
+  moa.on('timeupdate', context => window.updates.push(context));
+  moa.on('action', async ({ id }) => {
+    if (id === 'mark') {
+      const context = await moa.context(), saved = await moa.storage.get();
+      await moa.storage.set({ ...saved, position: context?.currentTime || 18, actions: (saved.actions || 0) + 1 });
+      await moa.notify('책갈피 저장됨');
+    } else if (id === 'play') {
+      await moa.player.seek((await moa.storage.get()).position);
+      await moa.player.play();
+      await moa.notify('책갈피 재생됨');
+    } else if (id === 'pause') {
+      await moa.player.pause();
+      await moa.notify('일시정지됨');
+    }
+  });` };
 const video = await readFile(process.env.MOA_TEST_VIDEO);
 try {
   const profile = (await env.app.inject({ method: 'POST', url: '/api/profiles', payload: { name: 'Plugin test' } })).json();
@@ -30,10 +55,10 @@ try {
   await context.addInitScript(id => { if (window !== top) return; localStorage.setItem('moa.profile', id); localStorage.setItem('moa.fullscreenOnPlay', '0'); localStorage.setItem('moa.remoteMode', 'off'); }, profile.id);
   const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
   const base = web.resolvedUrls.local[0];
-  await page.goto(base + 'settings');
+  await page.goto(base + 'plugins');
   await page.getByLabel('플러그인 파일', { exact: true }).setInputFiles({ name: 'test.moa-plugin.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ ...manifest, html })) });
   await page.getByRole('button', { name: '설치·업데이트', exact: true }).click();
-  const row = page.locator('.plugin-row');
+  const row = page.locator('.plugin-row').filter({ hasText: manifest.name });
   await row.getByRole('button', { name: '열기', exact: true }).click();
   let frame = page.frameLocator('.plugin-dialog iframe');
   await frame.getByText('재생 화면의 자막 및 음성 메뉴에서 이 도구를 열어 주세요.', { exact: true }).waitFor();
@@ -48,6 +73,7 @@ try {
     return { dom, storage };
   }), { dom: true, storage: true });
   assert.equal(await child.evaluate(async () => { try { await moa.fetch('https://example.org/subtitle'); return false; } catch { return true; } }), true);
+  assert.deepEqual(await child.evaluate(async () => Promise.all([() => moa.storage.get(), () => moa.player.pause(), () => moa.notify('거부되어야 함')].map(async call => { try { await call(); return false; } catch { return true; } }))), [true, true, true]);
   let release, received;
   const gate = new Promise(resolve => { release = resolve; }), request = new Promise(resolve => { received = resolve; });
   await page.route('**/api/plugins', async route => { received(); await gate; await route.continue(); });
@@ -77,12 +103,47 @@ try {
   await row.scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: verificationPath('plugins-390.png'), animations: 'disabled' });
+  await page.getByLabel('플러그인 파일', { exact: true }).setInputFiles({ name: 'script.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(script)) });
+  await page.getByRole('button', { name: '설치·업데이트', exact: true }).click();
+  await page.getByText('설정 자동 실행됨', { exact: true }).waitFor();
+  const scriptRow = page.locator('.plugin-row').filter({ hasText: script.name });
+  assert.equal(await scriptRow.getByRole('button', { name: '열기', exact: true }).count(), 0);
+  assert.equal(await page.locator('.plugin-dialog').count(), 0);
+  assert.equal(await page.locator(`iframe[title="${script.name}"]`).getAttribute('hidden'), '');
+  await scriptRow.getByRole('button', { name: '책갈피 저장', exact: true }).click();
+  await page.getByText('책갈피 저장됨', { exact: true }).waitFor();
+  const stored = () => JSON.parse(env.db.get('SELECT value FROM website_plugin_data WHERE plugin_id=? AND profile_id=?', script.id, profile.id).value);
+  assert.deepEqual(stored(), { ready: 1, position: 18, actions: 1 });
   await page.route('**/fixture/plugin.mp4', route => route.fulfill({ contentType: 'video/mp4', body: video }));
   await page.route('**/api/playback', route => route.fulfill({ json: { sessionId: 'plugin', episodeId: 'e1', mediaId: 'm', mediaTitle: 'Plugin fixture', mediaType: 'movie', mode: 'direct', mime: 'video/mp4', url: '/fixture/plugin.mp4', duration: 600, startPosition: 0, subtitles: [], audioTracks: [] } }));
   await page.goto(base + 'tests/fixtures/player.html');
   await page.waitForFunction(() => document.querySelector('video')?.readyState >= 2);
   await page.locator('video').evaluate(element => element.pause());
+  await page.getByText('재생 자동 실행됨', { exact: true }).waitFor();
+  assert.equal(await page.locator('.panel-subs').count(), 0);
+  const scriptFrame = await (await page.locator(`iframe[title="${script.name}"]`).elementHandle()).contentFrame();
+  assert.deepEqual(await scriptFrame.evaluate(() => [window.scriptText, window.comparison]), ['</script>', true]);
+  assert.equal((await scriptFrame.evaluate(() => window.initialContext)).episodeId, 'e1');
+  assert.equal(stored().ready, 2);
+  await scriptFrame.waitForFunction(() => window.updates.some(item => item.episodeId === 'e1'), undefined, { polling: 100 });
   await page.getByRole('button', { name: '자막 및 음성', exact: true }).click();
+  await page.getByRole('button', { name: `책갈피 재생 ${script.name}`, exact: true }).click();
+  await page.getByText('책갈피 재생됨', { exact: true }).waitFor();
+  await page.waitForFunction(() => { const video = document.querySelector('video'); return !video.paused && video.currentTime >= 18; });
+  await page.getByRole('button', { name: `플러그인 일시정지 ${script.name}`, exact: true }).click();
+  await page.getByText('일시정지됨', { exact: true }).waitFor();
+  assert.equal(await page.locator('video').evaluate(element => element.paused), true);
+  await page.getByRole('button', { name: `책갈피 저장 ${script.name}`, exact: true }).click();
+  await page.getByText('책갈피 저장됨', { exact: true }).waitFor();
+  assert.equal(stored().actions, 2); assert.ok(stored().position >= 18);
+  assert.match(await scriptFrame.evaluate(async () => { try { await moa.player.seek(Infinity); return ''; } catch (error) { return error.message; } }), /재생 요청/);
+  const otherTab = await context.newPage();
+  await otherTab.route('**/profile-switch', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Profile switch</title>' }));
+  await otherTab.goto(base + 'profile-switch');
+  await otherTab.evaluate(() => localStorage.setItem('moa.profile', 'changed-profile'));
+  assert.equal(await scriptFrame.evaluate(async () => { const before = window.updates.length; await new Promise(resolve => setTimeout(resolve, 2100)); return window.updates.length === before; }), true);
+  await otherTab.evaluate(id => localStorage.setItem('moa.profile', id), profile.id);
+  await otherTab.close();
   await page.getByRole('button', { name: '자막 가져오기 도구 플러그인', exact: true }).click();
   frame = page.frameLocator('.plugin-dialog iframe');
   await frame.getByText('Plugin fixture', { exact: true }).waitFor();
@@ -95,10 +156,14 @@ try {
   assert.equal(saved.length, 1);
   assert.match((await env.app.inject(saved[0].url)).body, /Plugin subtitle/);
   await page.screenshot({ path: verificationPath('plugin-subtitle-390.png'), animations: 'disabled' });
-  await page.goto(base + 'settings');
+  await page.goto(base + 'plugins');
   page.once('dialog', dialog => dialog.accept());
-  await page.locator('.plugin-row').getByRole('button', { name: '삭제', exact: true }).click();
+  await row.getByRole('button', { name: '삭제', exact: true }).click();
+  await row.waitFor({ state: 'detached' });
+  page.once('dialog', dialog => dialog.accept());
+  await scriptRow.getByRole('button', { name: '삭제', exact: true }).click();
   await page.getByText('설치된 플러그인이 없습니다.', { exact: true }).waitFor();
+  assert.equal(env.db.get('SELECT count(*) AS n FROM website_plugin_data').n, 0);
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ passed: true, checks: ['install', 'permissions', 'sandbox', 'settings context', 'enable persistence', 'mobile layout', 'player context', 'subtitle storage', 'delete'] }));
+  console.log(JSON.stringify({ passed: true, checks: ['install', 'permissions', 'sandbox', 'settings context', 'enable persistence', 'mobile layout', 'automatic JS ready', 'action and profile storage', 'player control', 'timeupdate', 'cross-tab profile event isolation', 'player context', 'subtitle storage', 'delete cascade'] }));
 } finally { await browser.close(); await web.close(); await env.app.close(); await rm(directory, { recursive: true, force: true }); }

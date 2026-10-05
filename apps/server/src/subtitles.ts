@@ -1,6 +1,6 @@
 import { mkdir, readFile, stat, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
-import iconv from 'iconv-lite';
+import { decodeSubtitleBuffer } from '@moa/subtitles-ko';
 import type { Config } from './config.js';
 import { command, hash } from './util.js';
 
@@ -35,8 +35,7 @@ export class SubtitleCache {
     const temporary = `${cached}.tmp`;
     try {
       if (stream === undefined && /\.sa?mi$/i.test(file)) {
-        const buffer = await readFile(file); const utf8 = buffer.toString('utf8');
-        const input = utf8.includes('\ufffd') ? iconv.decode(buffer, 'cp949') : utf8;
+        const input = decodeSubtitleBuffer(await readFile(file));
         const { writeFile } = await import('node:fs/promises'); await writeFile(temporary, smiToVtt(input));
       } else {
         const codec = format === 'ass' ? 'ass' : 'webvtt';

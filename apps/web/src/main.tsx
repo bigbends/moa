@@ -11,7 +11,7 @@ import { GenrePage, HomePage } from "./pages/HomePage";
 import { PlayRedirect, TitlePage } from "./pages/TitlePage";
 import { ProfilesPage } from "./pages/ProfilesPage";
 import { HistoryPage, MePage, MyListPage, SearchPage } from "./pages/ListPages";
-import { LibraryPage, SettingsPage } from "./pages/AdminPages";
+import { LibraryPage, PluginsPage, SettingsPage, SubtitlesPage } from "./pages/AdminPages";
 import { SourcesPage, SourceBrowsePage } from "./pages/SourcesPage";
 import { WatchPage } from "./pages/WatchPage";
 import { AccountsPage } from "./pages/AccountsPage";
@@ -49,7 +49,7 @@ function RequireProfile({ children }: { children: ReactNode }) {
 function RequireAdmin({ children }: { children: ReactNode }) {
   const me = useMe();
   if (me.isPending) return null;
-  return me.data?.role === "admin" ? <>{children}</> : <div className="page-pad narrow"><EmptyState title="관리자만 볼 수 있어요" body="소스와 라이브러리는 관리자가 관리해요." /></div>;
+  return me.data?.role === "admin" ? <>{children}</> : <div className="page-pad narrow"><EmptyState title="관리자만 볼 수 있어요" body="이 페이지는 관리자만 사용할 수 있어요." /></div>;
 }
 
 function GenreRoute({ type }: { type?: MediaType }) {
@@ -81,6 +81,8 @@ const router = createBrowserRouter([
       { path: "/sources", element: <RequireAdmin><SourcesPage /></RequireAdmin> },
       { path: "/sources/:id", element: <SourceBrowsePage /> },
       { path: "/library", element: <RequireAdmin><LibraryPage /></RequireAdmin> },
+      { path: "/plugins", element: <PluginsPage /> },
+      { path: "/subtitles", element: <RequireAdmin><SubtitlesPage /></RequireAdmin> },
       { path: "/remote-access", element: <RequireAdmin><RemoteAccessPage /></RequireAdmin> },
       { path: "/accounts", element: <AccountsPage /> },
       { path: "/about", element: <AboutPage /> },

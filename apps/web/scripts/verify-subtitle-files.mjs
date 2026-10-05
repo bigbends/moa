@@ -21,26 +21,11 @@ for (const id of ['1', '2']) {
   backend.db.run('INSERT INTO episodes VALUES(?,?,1,1,\'회차\',600,NULL)', `e${id}`, `m${id}`);
 }
 process.env.VITE_MOCK = '0';
-const server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), logLevel: 'error', server: { port: 0, open: false }, plugins: [{
-  name: 'subtitle-library-verification', configureServer(server) {
-    server.middlewares.use(async (req, res, next) => {
-      if (req.url !== '/__subtitle_library') return next();
-      res.setHeader('Content-Type', 'text/html');
-      res.end(await server.transformIndexHtml('/__subtitle_library', `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><main class="page settings-page" id="root"></main><script type="module">
-        import React from 'react';
-        import { createRoot } from 'react-dom/client';
-        import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-        import { SubtitleLibrarySettings } from '/src/components/SubtitleLibrarySettings.tsx';
-        import '/src/styles/base.css'; import '/src/styles/components.css'; import '/src/styles/pages.css';
-        createRoot(document.getElementById('root')).render(React.createElement(QueryClientProvider,{client:new QueryClient()},React.createElement(SubtitleLibrarySettings)));
-      </script></body></html>`));
-    });
-  }
-}] });
+const server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), logLevel: 'error', server: { port: 0, open: false, hmr: false } });
 await server.listen();
 const browser = await chromium.launch({ executablePath: process.env.MOA_BROWSER_EXECUTABLE, args: ['--autoplay-policy=no-user-gesture-required'] });
 const errors = [], cancelled = [], jobs = [];
-let session = 0, completed = false, importGate;
+let session = 0, completed = false, importGate, role = 'admin';
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   page.setDefaultTimeout(15000);
@@ -74,7 +59,9 @@ try {
       return json({ sessionId: `s${++session}`, episodeId: body.episodeId, mediaId: body.episodeId === 'e2' ? 'm2' : 'm1', mediaTitle: '자막 검증', mediaType: 'movie', mode: 'direct', mime: 'video/mp4', url: '/fixture/video.mp4', duration: 600, startPosition: body.startPosition || 0, subtitles: [original, ...uploads], audioTracks: [], streamId: body.streamId || 'a', streams: [{ id: 'a', label: '서버 A' }, { id: 'b', label: '서버 B' }] });
     }
     if (pathname === '/api/settings') return json({ defaultSubtitleLang: 'en', subtitleSize: 'medium', autoFetchSubtitles: false, autoplayNext: false, translationMode: 'manual' });
-    if (pathname === '/api/me') return json({ role: 'admin' });
+    if (pathname === '/api/me') return json({ role });
+    if (pathname === '/api/profiles') return json([{ id: 'test', name: '테스트', color: 'blue' }]);
+    if (pathname === '/api/sources') return json([]);
     if (pathname === '/api/plugins') return json([]);
     if (pathname === '/api/translation/config') return json({ provider: 'gemini', configured: true, enabled: true, model: 'test', keys: [] });
     if (pathname.endsWith('/subtitles/translations')) return json([translated]);
@@ -194,7 +181,8 @@ try {
   assert.deepEqual(cancelled, []);
   backend.db.run("INSERT INTO translation_cache(key,format,chunks,content,touched,complete) VALUES('test','vtt','[]',?,?,1)", vtt, Date.now());
   backend.db.run("INSERT INTO online_subtitles VALUES('online','e1','제작자','https://example.com/sub','vtt',?,'hash','token',?)", vtt, Date.now());
-  await page.goto(`${base}__subtitle_library`);
+  await page.goto(`${base}subtitles`);
+  await page.getByRole('heading', { name: '자막 관리', exact: true }).waitFor();
   await page.getByText('6개 ·', { exact: false }).waitFor();
   const savedDownload = page.waitForEvent('download');
   await page.getByRole('button', { name: '직접.srt 다운로드', exact: true }).click();
@@ -215,6 +203,20 @@ try {
   await page.getByRole('button', { name: '제작자 · 한국어 삭제', exact: true }).click();
   await page.getByRole('button', { name: '제작자 · 한국어 삭제', exact: true }).waitFor({ state: 'detached' });
   assert.equal(backend.db.get('SELECT count(*) AS n FROM online_subtitles').n, 0);
+  await page.goto(`${base}me`);
+  await page.getByRole('link', { name: '저장한 자막', exact: true }).click();
+  await page.getByRole('heading', { name: '자막 관리', exact: true }).waitFor();
+  await page.getByRole('button', { name: '프로필 메뉴', exact: true }).click();
+  await page.getByRole('menuitem', { name: '플러그인', exact: true }).click();
+  await page.getByRole('heading', { name: '플러그인', exact: true }).waitFor();
+  role = 'member';
+  await page.goto(`${base}subtitles`);
+  await page.getByRole('heading', { name: '관리자만 볼 수 있어요', exact: true }).waitFor();
+  assert.equal(await page.locator('#saved-subtitles').count(), 0);
+  await page.goto(`${base}me`);
+  assert.equal(await page.getByRole('link', { name: '저장한 자막', exact: true }).count(), 0);
+  await page.getByRole('link', { name: '플러그인', exact: true }).click();
+  await page.getByRole('heading', { name: '플러그인', exact: true }).waitFor();
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ passed: true, checks: ['original position', 'translated export', 'stream subtitle retention', 'file selection', 'panel drop', 'video archive drop', 'profile change abort', 'source switch with uploaded subtitle', 'source dialog checkbox', 'saved uploads after reload', 'source switch with active translation', 'admin upload/AI/online subtitle list/download/delete'] }));
 } finally { await browser.close(); await server.close(); await backend.app.close(); await rm(directory, { recursive: true, force: true }); }

@@ -3,7 +3,7 @@ import { SubtitleLibrarySettings } from '../components/SubtitleLibrarySettings';
 import { remotePreference, setRemotePreference, type RemotePreference } from "../lib/remote";
 import { NavigationSettings } from "../components/NavigationSettings";
 import { devicePrefs, setDevicePref, type DevicePrefs } from "../lib/device-prefs";
-import { Globe, Info, ChevronRight, Folder, FolderOpen, FolderPlus, RefreshCw, Trash2, Tv, X } from "lucide-react";
+import { Globe, Info, ChevronRight, Folder, FolderOpen, FolderPlus, Puzzle, RefreshCw, Subtitles, Trash2, Tv, X } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -228,7 +228,10 @@ export function SettingsPage() {
       </div></section>
       <section className="settings-group"><h2>정보</h2><div className="settings-card">{link("/about", <Info size={20} />, "정보/크레딧", "작품 정보 제공 및 오픈소스 라이선스")}</div></section>
       <NavigationSettings />
-      <WebsitePlugins admin={admin} />
+      <section className="settings-group"><h2>플러그인과 자막</h2><div className="settings-card">
+        {link("/plugins", <Puzzle size={20} />, "플러그인", "추가 기능 실행과 설치·업데이트")}
+        {admin && link("/subtitles", <Subtitles size={20} />, "저장한 자막", "AI 번역·온라인·직접 가져온 자막 관리")}
+      </div></section>
       {admin && <><section className="settings-group">
         <h2>소스와 라이브러리</h2>
         <div className="settings-card">
@@ -240,8 +243,16 @@ export function SettingsPage() {
         <p className="settings-hint">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
       </section>
       <TranslationSettings />
-      <SubtitleLibrarySettings />
       <NetworkSettings /></>}
     </div>
   );
+}
+
+export function PluginsPage() {
+  const me = useMe();
+  return <div className="page-pad narrow"><header className="page-head"><h1>플러그인</h1></header>{me.isPending ? <Skeleton className="settings-sk" /> : <WebsitePlugins admin={me.data?.role === 'admin'} />}</div>;
+}
+
+export function SubtitlesPage() {
+  return <div className="page-pad narrow"><header className="page-head"><h1>자막 관리</h1></header><SubtitleLibrarySettings /></div>;
 }

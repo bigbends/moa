@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { pluginPackage } from '../src/website-plugins.js';
 import { buildApp } from '../src/app.js';
 
-const template = { ...JSON.parse(await readFile(new URL('../../../plugins/template/manifest.json', import.meta.url), 'utf8')), html: '<p>Plugin test</p>' };
+const template = { ...JSON.parse(await readFile(new URL('../../../plugins/template/examples/subtitle-helper/manifest.json', import.meta.url), 'utf8')), html: '<p>Plugin test</p>' };
 
 test('plugin packages validate permissions, sizes, origins and API versions', () => {
   assert.deepEqual(pluginPackage(template), template);
@@ -14,6 +14,59 @@ test('plugin packages validate permissions, sizes, origins and API versions', ()
     assert.throws(() => pluginPackage({ ...template, ...patch }));
   }
   assert.doesNotThrow(() => pluginPackage({ ...template, connect: ['https://example.org'] }));
+  const { html: _, ...manifest } = template;
+  const script = { ...manifest, script: 'moa.on("ready", () => {});', permissions: ['storage', 'notifications', 'player.control'], actions: [{ id: 'bookmark', label: '책갈피' }] };
+  assert.deepEqual(pluginPackage(script), script);
+  for (const patch of [{ html: '<p>Mixed</p>' }, { script: '' }, { script: '가'.repeat(70 * 1024) }, { actions: [{ id: 'bad/id', label: 'Bad' }] }, { actions: [{ id: 'valid', label: '' }] }, { actions: [{ id: 'one', label: 'One' }, { id: 'one', label: 'Two' }] }, { actions: Array.from({ length: 9 }, (_, i) => ({ id: `action-${i}`, label: 'Action' })) }]) assert.throws(() => pluginPackage({ ...script, ...patch }));
+  assert.throws(() => pluginPackage({ ...template, actions: script.actions }));
+});
+
+test('script plugin storage enforces permission, revision, profile boundaries, size and deletion', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'moa-plugin-storage-'));
+  let env = await buildApp({ dataDir: directory, mediaRoot: directory, requireAccount: true }, false);
+  const admin = { 'x-moa-account': 'owner', 'x-moa-role': 'admin' }, member = { 'x-moa-account': 'member', 'x-moa-role': 'member' };
+  const { html: _, ...manifest } = template;
+  const script = { ...manifest, script: 'moa.on("ready", () => {});', permissions: ['storage'], actions: [{ id: 'mark', label: '책갈피' }] };
+  try {
+    const profiles = [];
+    for (const name of ['First', 'Second']) profiles.push((await env.app.inject({ method: 'POST', url: '/api/profiles', headers: member, payload: { name } })).json());
+    const headers = profiles.map(profile => ({ ...member, 'x-moa-profile': profile.id }));
+    const endpoint = `/api/plugins/${script.id}/storage`;
+    const install = async (payload: object) => (await env.app.inject({ method: 'POST', url: '/api/admin/plugins', headers: admin, payload })).json();
+    let revision = (await install(script)).revision;
+    const storage = (profile: number, value?: unknown, version = revision) => env.app.inject({ method: 'POST', url: endpoint, headers: headers[profile], payload: { revision: version, ...(value === undefined ? {} : { value }) } });
+    const listing = (await env.app.inject({ url: '/api/plugins', headers: headers[0] })).json()[0];
+    assert.equal(listing.kind, 'script'); assert.equal(listing.script, undefined); assert.deepEqual(listing.actions, script.actions);
+    assert.deepEqual((await storage(0)).json(), {});
+    assert.deepEqual((await storage(0, { position: 42, name: '첫 프로필' })).json(), { position: 42, name: '첫 프로필' });
+    assert.deepEqual((await storage(1)).json(), {});
+    assert.deepEqual((await storage(1, { position: 7 })).json(), { position: 7 });
+    assert.deepEqual((await storage(0)).json(), { position: 42, name: '첫 프로필' });
+    assert.equal((await env.app.inject({ method: 'POST', url: endpoint, headers: member, payload: { revision } })).statusCode, 401);
+    assert.equal((await env.app.inject({ method: 'POST', url: endpoint, headers: { ...admin, 'x-moa-profile': profiles[0].id }, payload: { revision } })).statusCode, 401);
+    assert.equal((await storage(0, { text: '가'.repeat(5500) })).statusCode, 413);
+    assert.equal((await storage(0, Object.fromEntries(Array.from({ length: 129 }, (_, i) => [`k${i}`, i])))).statusCode, 400);
+    for (const value of [null, [], 'text']) assert.equal((await storage(0, value)).statusCode, 400);
+    const previous = revision;
+    revision = (await install({ ...script, version: '1.0.1' })).revision;
+    assert.equal((await storage(0, { overwritten: true }, previous)).statusCode, 409);
+    assert.deepEqual((await storage(0)).json(), { position: 42, name: '첫 프로필' });
+    revision = (await install({ ...script, permissions: [] })).revision;
+    assert.equal((await storage(0)).statusCode, 403);
+    assert.equal((await storage(0, {})).statusCode, 403);
+    revision = (await install(script)).revision;
+    await env.app.inject({ method: 'PATCH', url: `/api/admin/plugins/${script.id}`, headers: admin, payload: { enabled: false } });
+    assert.equal((await storage(0)).statusCode, 404);
+    await env.app.inject({ method: 'PATCH', url: `/api/admin/plugins/${script.id}`, headers: admin, payload: { enabled: true } });
+    await env.app.close(); env = await buildApp({ dataDir: directory, mediaRoot: directory, requireAccount: true }, false);
+    assert.deepEqual((await storage(0)).json(), { position: 42, name: '첫 프로필' });
+    await env.app.inject({ method: 'DELETE', url: `/api/profiles/${profiles[0].id}`, headers: member });
+    assert.equal(env.db.get('SELECT count(*) AS n FROM website_plugin_data')!.n, 1);
+    assert.deepEqual((await storage(1)).json(), { position: 7 });
+    await env.app.inject({ method: 'DELETE', url: `/api/admin/plugins/${script.id}`, headers: admin });
+    assert.equal(env.db.get('SELECT count(*) AS n FROM website_plugin_data')!.n, 0);
+    assert.equal((await storage(1)).statusCode, 404);
+  } finally { await env.app.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
 test('plugin installation persists, admin controls are protected and network access is limited', async () => {

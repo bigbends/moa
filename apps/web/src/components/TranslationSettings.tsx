@@ -23,6 +23,7 @@ export function TranslationSettings() {
   const [customModel, setCustomModel] = useState('');
   const [batch, setBatch] = useState<string | null>(null);
   const [models, setModels] = useState<string[] | null>(null);
+  const [testing, setTesting] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; error?: boolean } | null>(null);
 
   useEffect(() => {
@@ -52,17 +53,25 @@ export function TranslationSettings() {
   });
 
   const testKey = useMutation({
-    mutationFn: testTranslationKey,
-    onSuccess: data => { client.setQueryData<TranslationConfig>(translationKeys.config, data); setMessage(null); },
+    mutationFn: async (ids: string[]) => {
+      for (const id of ids) {
+        setTesting(id);
+        client.setQueryData<TranslationConfig>(translationKeys.config, await testTranslationKey(id));
+      }
+    },
+    onMutate: () => setMessage(null),
     onError: error => {
       setMessage({ text: apiMessage(error, '키를 검사하지 못했어요. 다시 시도해 주세요.'), error: true });
       void client.invalidateQueries({ queryKey: translationKeys.config });
-    }
+    },
+    onSettled: () => setTesting(null)
   });
 
   const c = config.data;
   const busy = save.isPending || loadModels.isPending || testKey.isPending;
   const keys = c?.keys ?? [];
+  const checked = keys.filter(key => key.test).length;
+  const failed = keys.filter(key => key.test?.ok === false).length;
   const lines = [...new Set(draft.split(/\r?\n/).map(line => line.trim()).filter(Boolean))];
   const room = TRANSLATION_MAX_KEYS - keys.length;
   const tooMany = lines.length > room;
@@ -99,18 +108,22 @@ export function TranslationSettings() {
 
         <div className="translation-keys">
           <div className="translation-keys-head">
-            <div><b>API 키</b><small>등록한 순서대로 쓰고, 한도나 오류로 막히면 다음 키로 넘어가요. 테스트를 누르면 현재 모델로 한 줄을 번역해 키·권한·한도를 확인하며 API 사용료가 발생할 수 있어요.</small></div>
+            <div><b>API 키</b><small>등록한 순서대로 쓰고, 한도나 오류로 막히면 다음 키로 넘어가요. 전체 테스트는 각 키로 현재 모델에 한 줄씩 번역을 요청해 권한·한도를 확인하며 API 사용료가 발생할 수 있어요.</small></div>
             <span className={cx('status-pill', c.configured && 'is-ok')}>{keys.length ? `${keys.length}개` : '없음'}</span>
           </div>
+          {keys.length > 0 && <div className="network-actions">
+            <small className="translation-key-count" role="status">{testKey.isPending ? `${testKey.variables!.indexOf(testing!) + 1}/${testKey.variables!.length}개 검사 중…` : checked ? `${checked}개 검사 · 정상 ${checked - failed}개 · 문제 ${failed}개${checked < keys.length ? ` · 미검사 ${keys.length - checked}개` : ''}` : '전체 테스트로 등록한 키를 확인해 주세요.'}</small>
+            <Button type="button" variant="primary" disabled={busy} onClick={() => testKey.mutate(keys.map(key => key.id))}>{testKey.isPending && testKey.variables!.length > 1 ? '전체 검사 중…' : '전체 테스트'}</Button>
+          </div>}
           {keys.length > 0 && <ol className="translation-key-list" aria-label="등록된 키">
             {keys.map((key, i) => <li key={key.id} className={cx(key.test?.ok === false && 'is-invalid')}>
               <span className="translation-key-order">{i + 1}</span>
               <KeyRound size={16} aria-hidden="true" />
               <div className="translation-key-content">
                 <code>{key.label}</code>
-                <small className={cx('translation-key-result', key.test?.ok && 'is-ok')} role="status">{testKey.isPending && testKey.variables === key.id ? '검사 중…' : key.test ? key.test.ok ? '정상 · 현재 모델로 번역할 수 있어요.' : translationErrorMessage(key.test.error) : '검사하지 않음'}</small>
+                <small className={cx('translation-key-result', key.test?.ok && 'is-ok')} role="status">{testing === key.id ? '검사 중…' : key.test ? key.test.ok ? '정상 · 현재 모델로 번역할 수 있어요.' : translationErrorMessage(key.test.error) : '검사하지 않음'}</small>
               </div>
-              <Button type="button" aria-label={`${i + 1}번 키 테스트`} disabled={busy} onClick={() => testKey.mutate(key.id)}>테스트</Button>
+              {key.test?.ok === false && <Button type="button" aria-label={`${i + 1}번 키 다시 검사`} disabled={busy} onClick={() => testKey.mutate([key.id])}>다시 검사</Button>}
               <IconButton label={`${i + 1}번 키 지우기`} disabled={busy} onClick={() => { if (confirm(`${i + 1}번 키(${key.label})를 지울까요?${keys.length === 1 ? ' 마지막 키라 번역을 사용할 수 없게 돼요.' : ''}`)) save.mutate({ removeKeyIds: [key.id] }); }}><Trash2 size={16} /></IconButton>
             </li>)}
           </ol>}

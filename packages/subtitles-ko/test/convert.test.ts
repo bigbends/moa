@@ -19,6 +19,9 @@ test("UTF-8, CP949/EUC-KR and UTF-16 BOM/endian detection preserves Korean", () 
   assert.equal(detectSubtitleEncoding(cp), "cp949");
   assert.equal(decodeSubtitleBuffer(cp), "뷁 쀍 안녕하세요");
   assert.equal(decodeSubtitleBuffer(Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(text)])), text);
+  const japanese = '｢日本語の字幕｣ → ★';
+  assert.equal(decodeSubtitleBuffer(iconv.encode(japanese, 'shift_jis'), 'shift_jis'), japanese);
+  assert.equal(decodeSubtitleBuffer(Buffer.from(text), 'unknown-charset'), text);
 });
 
 test("SRT becomes valid VTT with milliseconds, multiple lines and escaped entities", () => {

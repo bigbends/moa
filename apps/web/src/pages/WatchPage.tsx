@@ -1,7 +1,7 @@
 import { importSubtitleFile, exportSubtitle, SUBTITLE_FILES } from '../player/subtitle-files';
-import { PluginTools } from '../components/WebsitePlugins';
+import { PluginScripts, PluginTools } from '../components/WebsitePlugins';
 import { preparePlayback, retirePlayback } from '../player/session-lifecycle';
-import { subtitlesOffForTitle, rememberSubtitlesOff, subtitleOffsetForTitle, rememberSubtitleOffset } from "../player/subtitle-preference";
+import { subtitlesOffForTitle, rememberSubtitlesOff, subtitleOffsetForTitle, rememberSubtitleOffset, subtitlePreference, rememberSubtitle, restoreSubtitle } from "../player/subtitle-preference";
 import { enterFullscreen } from "../lib/playback-fullscreen";
 import { devicePrefs, setDevicePref } from "../lib/device-prefs";
 import { isRemoteMode, type RemotePlayerEvent } from "../lib/remote";
@@ -265,6 +265,19 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
   useEffect(() => {
     if (!session || !settings || initializedSubtitles.current === session) return;
     initializedSubtitles.current = session;
+    const remembered = subtitlePreference(episodeId);
+    if (remembered !== undefined) {
+      subtitleChoice.current ||= 1;
+      if (remembered === null) { setSubtitle(null); return; }
+      const controller = new AbortController(), choice = subtitleChoice.current;
+      void restoreSubtitle(episodeId, session.subtitles, remembered, controller.signal).then(track => {
+        if (controller.signal.aborted || choice !== subtitleChoice.current) return;
+        if (track) setExtraSubs(list => [...list.filter(item => item.id !== track.id), track]);
+        setSubtitle(track);
+        setNotice(track ? null : "이전에 사용한 자막이 없어졌어요. 다른 자막을 선택해 주세요.");
+      }).catch(() => { if (!controller.signal.aborted && choice === subtitleChoice.current) setNotice("이전에 사용한 자막을 불러오지 못했어요. 다시 선택해 주세요."); });
+      return () => { controller.abort(); if (initializedSubtitles.current === session) initializedSubtitles.current = null; };
+    }
     if (subtitleChoice.current || isTranslationTrack(subtitle) || subtitle?.source === 'upload') {
       // A new playback session revokes embedded subtitle URLs from the old one.
       setSubtitle(current => current ? session.subtitles.find(track => track.id === current.id) ?? (current.provenance || isTranslationTrack(current) || current.source === 'upload' ? current : null) : null);
@@ -334,6 +347,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
       if (controller.signal.aborted || subtitleChoice.current !== choice) return;
       setExtraSubs(list => [...list.filter(item => item.id !== track.id), track]);
       setSubtitle(track);
+      rememberSubtitle(session.episodeId, track);
       if (!quiet) rememberSubtitlesOff(session.mediaId, false);
       const who = track.provenance?.creatorName ?? result.candidates.find(item => item.id === candidateId)?.creatorName;
       setNotice(quiet ? `${who ? `${who} 님의 ` : ""}한국어 자막을 찾아 적용했어요` : null);
@@ -377,7 +391,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
   const liveShown = useRef<{ id: string; ranges: TranslatedRange[] } | null>(null);
   const pendingRevision = useRef<{ track: SubtitleTrack; ranges: TranslatedRange[]; since: number } | null>(null);
   const showTranslated = (track: SubtitleTrack) => {
-    if (session) rememberSubtitlesOff(session.mediaId, false);
+    if (session) { rememberSubtitlesOff(session.mediaId, false); rememberSubtitle(session.episodeId, track); }
     applyAbort.current?.abort();
     setSubtitle(track);
   };
@@ -502,7 +516,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
   const translatingHere = showingLive && !live && untranslatedGap(liveJob!.translatedRanges, time, total);
 
   const chooseSubtitle = (track: SubtitleTrack | null) => {
-    if (session) rememberSubtitlesOff(session.mediaId, !track);
+    if (session) { rememberSubtitlesOff(session.mediaId, !track); rememberSubtitle(session.episodeId, track); }
     subtitleChoice.current++;
     applyAbort.current?.abort();
     setOnline(state => ({ ...state, applying: undefined }));
@@ -942,6 +956,19 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
   const episodes = useMemo(() => media.data?.seasons.flatMap(season => season.episodes) ?? [], [media.data]);
   const VolumeIcon = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
   const error = sessionError ?? fatal;
+  const pluginPlayer = {
+    episodeId, title: titleLine.join(' · '), getTime: () => video.current?.currentTime || 0, onImport: addSubtitleFiles,
+    control: async (action: string, seconds?: number) => {
+      const v = video.current;
+      if (!v) throw new Error('재생을 준비하는 중이에요.');
+      if (action === 'play') await v.play();
+      else if (action === 'pause') v.pause();
+      else if (action === 'seek') {
+        if (live || !Number.isFinite(v.duration)) throw new Error('이 영상은 탐색할 수 없어요.');
+        seekTo(Math.max(0, Math.min(v.duration, seconds!)));
+      }
+    }
+  };
 
   return (
     <div
@@ -953,6 +980,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
       onDrop={event => { event.preventDefault(); setDraggingSubtitle(false); void addSubtitleFiles(Array.from(event.dataTransfer.files)); }}
       onPointerMove={event => { if (event.pointerType !== "touch") poke(); }}
     >
+      {session && <PluginScripts player={pluginPlayer} />}
       <input ref={subtitleInput} type="file" accept={SUBTITLE_FILES} multiple hidden aria-label="자막 파일 선택" onChange={event => { void addSubtitleFiles(Array.from(event.target.files ?? [])); event.target.value = ''; }} />
       {draggingSubtitle && <div className="subtitle-drop-hint" role="status"><FileUp size={32} /><b>자막 파일을 놓아 주세요</b><span>SRT · VTT · ASS · SMI · ZIP · 7z · RAR</span></div>}
       <video
@@ -1091,7 +1119,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
         </div>
       )}
 
-      {sourcePicker && <PlaybackSources episodeId={episodeId} position={live?0:video.current?.currentTime || time || session?.startPosition || 0} onClose={()=>setSourcePicker(false)} onPlay={(id,at)=>{saveProgress(true); handingOff.current = isTranslationTrack(subtitle) && translation.handoff(id); navigate(`/watch/${encodeURIComponent(id)}?t=${Math.max(0,Math.floor(at))}`, { state: isTranslationTrack(subtitle) || subtitle?.source === 'upload' ? { subtitle, offset: subOffset } : null });}}/>}
+      {sourcePicker && <PlaybackSources episodeId={episodeId} position={live?0:video.current?.currentTime || time || session?.startPosition || 0} onClose={()=>setSourcePicker(false)} onPlay={(id,at,sameEpisode)=>{saveProgress(true); handingOff.current = sameEpisode && isTranslationTrack(subtitle) && translation.handoff(id); const carry = sameEpisode && (isTranslationTrack(subtitle) || subtitle?.source === 'upload'); const remembered = subtitlePreference(episodeId); if (carry) rememberSubtitle(id, subtitle, remembered?.episodeId ?? episodeId); else if (sameEpisode && remembered === null) rememberSubtitle(id, null); navigate(`/watch/${encodeURIComponent(id)}?t=${Math.max(0,Math.floor(at))}`, { state: carry ? { subtitle, offset: subOffset } : null });}}/>}
       <footer className="player-bottom">
         {!live && <div className="seek" ref={bar} onPointerDown={onBarDown} onPointerMove={onBarMove} onPointerUp={onBarUp} onPointerLeave={() => setHover(null)}
           role="slider" aria-label="재생 위치" aria-valuemin={0} aria-valuemax={Math.round(total)} aria-valuenow={Math.round(shown)} aria-valuetext={clock(shown)} tabIndex={0}>
@@ -1157,7 +1185,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
               <section className="panel-col">
                 <h3>자막</h3>
                 <button className="opt opt-action subtitle-upload" disabled={importing} onClick={() => subtitleInput.current?.click()}>{importing ? <Spinner size={18} /> : <FileUp size={18} />}<span>{importing ? '자막을 읽는 중…' : '자막 파일 선택'}<small>파일을 여기에 끌어 놓아도 돼요</small></span></button>
-                <PluginTools episodeId={episodeId} title={titleLine.join(' · ')} getTime={() => video.current?.currentTime || 0} onImport={addSubtitleFiles} />
+                <PluginTools {...pluginPlayer} />
                 <button className={cx("opt", !subtitle && "is-active")} onClick={() => chooseSubtitle(null)}><Check size={18} className="opt-check" /><span>끄기</span></button>
                 {allSubs.map(track => (
                   <button key={track.id} className={cx("opt", subtitle?.id === track.id && "is-active")} onClick={() => chooseSubtitle(track)}>

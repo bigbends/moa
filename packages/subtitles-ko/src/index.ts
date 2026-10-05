@@ -175,6 +175,7 @@ export class SubtitleClient {
           catch (error) { this.error("download", error, scope.signal); }
         });
       }
+      if (!collected.length && !scope.signal.aborted) collected.push(...await this.collector.discover(resolved, query.episode, scope.signal));
       for (const candidate of collected) {
         const creator = creators.find(c => titleKey(c.name) === titleKey(candidate.creatorName));
         if (creator) candidate.creatorId = creator.id;
