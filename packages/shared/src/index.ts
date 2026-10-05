@@ -14,6 +14,7 @@ export interface Page<T> { items: T[]; page: number; hasNextPage: boolean; total
 /* ---------- Profiles ---------- */
 
 export interface Profile {
+  hasPin?: boolean;
   avatar?: string | null;
   id: string;
   name: string;
@@ -201,6 +202,22 @@ export interface ClientCapabilities {
   maxHeight?: number;
 }
 
+export interface WebsitePlugin {
+  apiVersion: 1;
+  revision: string;
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  placements: Array<'app' | 'settings' | 'player'>;
+  permissions: Array<'app.context' | 'app.navigate' | 'ui' | 'player.context' | 'player.control' | 'subtitles.import' | 'storage' | 'notifications'>;
+  kind: 'html' | 'script';
+  actions?: Array<{ id: string; label: string }>;
+  connect: string[];
+  enabled: boolean;
+}
+export interface WebsitePluginPackage extends Omit<WebsitePlugin, 'enabled' | 'revision' | 'kind'> { html?: string; script?: string }
+
 export interface SubtitleTrack {
   id: string;
   label: string;
@@ -214,6 +231,19 @@ export interface SubtitleTrack {
   source?: "embedded" | "local" | "extension" | "upload" | "online" | "translation";
   /** Online subtitles: who made it and where it came from (display as text). */
   provenance?: { creatorName: string; sourceUrl: string };
+}
+
+export interface SavedSubtitle {
+  id: string;
+  source: 'upload' | 'translation' | 'online';
+  name: string;
+  title: string;
+  episodes: (Pick<Episode, 'id' | 'mediaId' | 'season' | 'number' | 'title'> & { mediaTitle: string })[];
+  profile: string | null;
+  format: 'ass' | 'vtt';
+  bytes: number;
+  createdAt: number;
+  complete: boolean;
 }
 
 /* ---------- Online Korean subtitles (packages/subtitles-ko) ---------- */
@@ -416,8 +446,16 @@ export interface SourceRemovalResult { removedIds: string[]; impact: SourceRemov
 export interface DefaultNavigation { navigation: NavigationTab[] | null }
 export type DefaultNavigationUpdate = DefaultNavigation | { fromProfile: true };
 
+export interface UpdateStatus {
+  configured: boolean; connected: boolean;
+  state: 'idle' | 'checking' | 'updating' | 'current' | 'available' | 'blocked' | 'failed' | 'restart-required';
+  mode: 'git' | 'docker' | null;
+  current: string; latest: string | null; branch: string | null;
+  behind: number; ahead: number; checkedAt: number | null; error: string | null;
+}
+
 /* ---------- Gemini subtitle translation ---------- */
-export interface TranslationConfig { configured: boolean; enabled: boolean; model: string; batchSize: number; requestIntervalMs: number; retryCount: number; keys: { id: string; label: string }[] }
+export interface TranslationConfig { provider: "gemini" | "openai"; baseUrl: string; configured: boolean; enabled: boolean; model: string; batchSize: number; requestIntervalMs: number; retryCount: number; keys: { id: string; label: string; test?: { ok: boolean; error?: string } }[] }
 export interface TranslationJob {
   revision: number;
   partial: boolean;

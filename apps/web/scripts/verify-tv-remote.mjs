@@ -11,7 +11,7 @@ const base = process.env.MOA_VERIFY_URL || 'http://127.0.0.1:5181';
 const videoBytes = await readFile(process.env.MOA_TEST_VIDEO);
 const output = process.env.MOA_VERIFY_OUTPUT || verificationPath('verification-tv');
 await mkdir(output, { recursive: true });
-const browser = await chromium.launch({ channel: 'chromium', args: ['--autoplay-policy=no-user-gesture-required'] });
+const browser = await chromium.launch({ channel: 'chromium', executablePath: process.env.MOA_BROWSER_EXECUTABLE, args: ['--autoplay-policy=no-user-gesture-required'] });
 const errors = [], results = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function gate() { let release; const promise = new Promise(resolve => { release = resolve; }); return { promise, release }; }
@@ -158,7 +158,7 @@ try {
     await p.keyboard.press('ArrowRight');await p.keyboard.press('Enter');await p.waitForURL(base+'/');
     assert.equal(await p.evaluate(()=>document.documentElement.hasAttribute('data-tv')),true);
     await p.goto(base+'/settings');await p.getByRole('combobox',{name:'TV 리모컨 모드'}).waitFor();
-    await p.getByRole('combobox',{name:'TV 리모컨 모드'}).selectOption('on');
+    await p.getByRole('combobox',{name:'TV 리모컨 모드'}).click();await p.getByRole('option',{name:'항상 켜기',exact:true}).click();
     await p.getByRole('button',{name:'홈 편집',exact:true}).focus();await p.keyboard.press('Enter');
     const dialog=p.getByRole('dialog',{name:'홈 탭 편집'});await dialog.waitFor();
     await p.waitForFunction(()=>document.activeElement?.closest('[role="dialog"]'));
@@ -168,15 +168,16 @@ try {
     await p.evaluate(()=>window.dispatchEvent(new KeyboardEvent('keydown',{key:'Unidentified',keyCode:461,bubbles:true})));
     await p.waitForFunction(()=>!document.querySelector('[role="dialog"]'));
     await p.waitForFunction(()=>document.activeElement?.getAttribute('aria-label')==='홈 편집');
-    await p.getByRole('combobox',{name:'TV 리모컨 모드'}).selectOption('off');await p.reload();
+    await p.getByRole('combobox',{name:'TV 리모컨 모드'}).click();await p.getByRole('option',{name:'끄기',exact:true}).click();await p.reload();
     await p.getByRole('combobox',{name:'TV 리모컨 모드'}).waitFor();
-    assert.equal(await p.getByRole('combobox',{name:'TV 리모컨 모드'}).inputValue(),'off');
+    assert.equal(await p.getByRole('combobox',{name:'TV 리모컨 모드'}).textContent(),'끄기');
     assert.equal(await p.evaluate(()=>document.documentElement.hasAttribute('data-tv')),false);
     results.push('Profile entry, automatic mode, settings dialog trapping, LG Back and device preference persistence');await f.close();
   }
   for (const mobile of [false,true]) {
     const f=await fixture({path:'/',mobile}),p=f.page;
     await p.locator('.row-track a').first().focus();await p.keyboard.press('Enter');await p.waitForURL('**/title/m1');
+    await p.locator('.title-page:not(.title-skeleton)').waitFor();
     const back=p.getByRole('button',{name:'이전 화면',exact:true});await back.waitFor();
     const box=await back.boundingBox();assert.ok(box.y>=0&&box.x>=0);
     await p.waitForTimeout(600);await p.screenshot({path:output+`/detail-${mobile?'mobile':'desktop'}.png`});

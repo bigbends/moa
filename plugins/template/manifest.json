@@ -1,0 +1,27 @@
+{
+  "apiVersion": 1,
+  "id": "playback-bookmark",
+  "name": "Playback bookmark",
+  "version": "1.0.0",
+  "description": "Save one playback position per profile and return to it later.",
+  "placements": [
+    "player"
+  ],
+  "permissions": [
+    "player.context",
+    "player.control",
+    "storage",
+    "notifications"
+  ],
+  "connect": [],
+  "actions": [
+    {
+      "id": "save",
+      "label": "Save bookmark"
+    },
+    {
+      "id": "resume",
+      "label": "Resume bookmark"
+    }
+  ]
+}

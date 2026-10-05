@@ -37,6 +37,7 @@ export class Store {
       const columns = this.all<{ name: string }>('PRAGMA table_info(profiles)');
       if (!columns.some(c => c.name === 'account_id')) this.db.exec('ALTER TABLE profiles ADD COLUMN account_id TEXT');
       if (!columns.some(c => c.name === 'avatar')) this.db.exec('ALTER TABLE profiles ADD COLUMN avatar TEXT');
+      if (!columns.some(c => c.name === 'pin_hash')) this.db.exec('ALTER TABLE profiles ADD COLUMN pin_hash TEXT');
       this.db.exec('CREATE INDEX IF NOT EXISTS profiles_account ON profiles(account_id); CREATE TABLE IF NOT EXISTS account_migrations(id TEXT PRIMARY KEY,account_id TEXT NOT NULL)');
     });
   }

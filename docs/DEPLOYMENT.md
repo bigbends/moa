@@ -74,6 +74,7 @@ Linux에서 `.env`의 `COMPOSE_FILE`에 콜론으로 override를 추가한다. �
 | APK 실행 환경 끄기 | `compose.no-apk.yaml` | 선택 사항, `apk` profile을 활성화하지 않음 |
 | Linux VAAPI | `compose.vaapi.yaml` | render 장치의 GID와 GPU 드라이버 |
 | Cloudflare tunnel | `compose.tunnel.yaml` | 배포자 소유 tunnel config와 credentials |
+| 웹에서 서버 업데이트 | `compose.updates.yaml` | 호스트 업데이트 도구와 상태 디렉터리 연결, [설정 안내](UPDATES.md) |
 
 ### APK 기본 구성과 기존 설치
 
@@ -107,17 +108,23 @@ VAAPI는 `COMPOSE_FILE`에 `:compose.vaapi.yaml`을 추가하고 `stat -c %g /de
 
 TMDB 키는 관리자 API `PATCH /api/admin/tmdb/config`로 DB에 저장할 수 있고 재시작 없이 적용된다([UI 계약](SETUP-API.md)). `MOA_TMDB_TOKEN` 또는 `MOA_TMDB_API_KEY`를 `.env`에 넣으면 DB 설정보다 우선한다. 키가 없으면 작품 정보 기능만 꺼지며 설치·로그인은 가능하다. 승인된 귀속 표시·API 이용 조건은 [TMDB FAQ](https://developer.themoviedb.org/docs/faq)를 따른다. README 문구만으로 앱 귀속 표시를 충족한다고 간주하지 않는다.
 
-기본 outbound proxy는 앱의 설정 → 소스 연결에서 관리한다. 빈 값은 직접 연결이고 HTTP(S) CONNECT와 SOCKS5를 지원한다. 기존 proxy 설정은 앱 SQLite에 저장되므로 데이터 디렉터리를 보존한다. Gemini 키도 관리자 화면에서 관리하며 관련 비밀 파일은 `/data`에 저장한다. 번역은 자막과 문맥을 외부 API로 보내고 비용이 발생할 수 있다.
+기본 outbound proxy는 앱의 설정 → 소스 연결에서 관리한다. 빈 값은 직접 연결이고 HTTP(S) CONNECT와 SOCKS5를 지원한다. 기존 proxy 설정은 앱 SQLite에 저장되므로 데이터 디렉터리를 보존한다. Gemini·OpenAI 및 호환 API의 키도 관리자 화면에서 관리하며 관련 비밀 파일은 `/data`에 저장한다. 번역은 자막과 문맥을 설정한 API로 보내며 제공자에 따라 비용이 발생할 수 있다.
 
-업그레이드 전 앱·인증 DB, `.env`, `deploy/local`, APK named volume과 token을 비공개로 백업한다. SQLite 파일은 일관된 backup API를 쓰거나 서비스를 멈춘 상태에서 복사하고 WAL/SHM도 고려한다. 미디어는 별도로 보존한다. 기존 설치의 `MEDIA_CONTAINER_PATH`를 바꾸면 DB에 저장된 로컬 경로가 달라질 수 있다. 공개 이미지는 main의 `latest`와 버전 태그(예: `v1.0.0`)로 배포한다. `.env`의 `MOA_VERSION`으로 네 이미지의 버전을 함께 고정할 수 있다. 최초 GHCR 발행 후 각 패키지의 공개 접근 권한을 확인해야 한다. 이미지 발행 전에는 아래 로컬 빌드 경로를 사용한다.
+업그레이드 전 앱·인증 DB, `.env`, `deploy/local`, APK named volume과 token을 비공개로 백업한다. SQLite 파일은 일관된 backup API를 쓰거나 서비스를 멈춘 상태에서 복사하고 WAL/SHM도 고려한다. 미디어는 별도로 보존한다. 기존 설치의 `MEDIA_CONTAINER_PATH`를 바꾸면 DB에 저장된 로컬 경로가 달라질 수 있다. 공개 이미지는 main의 `latest`와 버전 태그(예: `v1.0.0`)로 배포한다. `.env`의 `MOA_VERSION`으로 네 이미지의 버전을 함께 고정할 수 있다. 최초 GHCR 발행 후 각 패키지의 공개 접근 권한을 확인해야 한다. 공개 이미지가 없는 브랜치는 다음 명령으로 직접 빌드해 실행한다.
 
 ```sh
-git pull
-docker compose pull
-docker compose up -d
+MOA_REVISION=$(git rev-parse HEAD) docker compose build
+docker compose up -d --pull never
 ```
 
-소스에서 빌드할 때는 `docker compose up -d --build`를 사용한다. 네트워크의 prebuilt 이미지를 가져오지 않으려면 `docker compose build` 후 `docker compose up -d --pull never`로 실행한다. workflow는 main push와 `v*` 태그에서 앱·인증·APK·connector 이미지를 amd64/arm64로 빌드한다. 로컬 빌드 검증과 ARM 실제 기기 검증은 별개다. 백업·운영 측정 결과를 공개 저장소에 추가하지 않는다.
+설치 후 호스트에 Node.js 22 이상을 준비하면 업데이트 도구를 사용할 수 있다.
+
+```sh
+node scripts/update.mjs check
+node scripts/update.mjs apply
+```
+
+업데이트 도구는 현재 Git 추적 브랜치와 Docker 실행 여부를 확인한다. 웹에서 실행하려면 [업데이트 안내](UPDATES.md)에 따라 호스트 도구를 연결한다. 기본 이미지 소유자는 `sidetool`이며 `MOA_IMAGE_OWNER`로 변경할 수 있다. workflow는 main push와 `v*` 태그에서 해당 저장소 소유자의 앱·인증·APK·connector 이미지를 amd64/arm64로 빌드한다. 로컬 빌드 검증과 ARM 실제 기기 검증은 별개다. 백업·운영 측정 결과를 공개 저장소에 추가하지 않는다.
 
 
 ## APK 기본 포함 변경의 검증

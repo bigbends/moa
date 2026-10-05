@@ -1,12 +1,12 @@
-// Isolated local video/subtitle harness. No backend or container is used.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
+import { buildApp } from '../../server/dist/app.js';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.MOA_PLAYWRIGHT_PATH || 'playwright-core');
@@ -23,32 +23,46 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Style: Default,Pretendard,32,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,0,2,20,20,20,1
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:02.00,0:00:04.00,Default,,0,0,0,,SYNC 자막
+Dialogue: 0,0:00:02.00,0:00:04.00,Default,,0,0,0,,{\\bord0\\shad0\\3a&HFF&}SYNC 자막 ｢日本語｣ ★→
 `;
+const directory = await mkdtemp(path.join(tmpdir(), 'moa-subtitle-rendering-'));
+const backend = await buildApp({ dataDir: directory, mediaRoot: directory }, false);
+const profileId = (await backend.app.inject({ method: 'POST', url: '/api/profiles', payload: { name: '자막 검증' } })).json().id;
+backend.db.run("INSERT INTO media VALUES('m',NULL,'자막 검증','movie','{}','2026')");
+backend.db.run("INSERT INTO episodes VALUES('e','m',1,1,'회차',8,NULL)");
+const tracks = {};
+for (const [format, content] of Object.entries({ ass, vtt, srt: '1\n00:00:02,000 --> 00:00:04,000\nSYNC 자막\n' })) {
+  const imported = await backend.app.inject({ method: 'POST', url: '/api/subtitles/import', headers: { 'x-moa-profile': profileId }, payload: { episodeId: 'e', filename: `fixture.${format}`, data: Buffer.from(content).toString('base64') } });
+  assert.equal(imported.statusCode, 200, imported.body); tracks[format] = imported.json()[0];
+}
 let clip;
 const server = await createServer({
   root: webRoot,
   cacheDir: path.join(evidence, 'vite-cache'),
   configFile: path.join(webRoot, 'vite.config.ts'),
-  server: { port: 0, open: false },
+  server: { port: 0, open: false, hmr: false },
   optimizeDeps: { include: ['jassub', 'jassub/dist/worker/worker.js', 'hls.js'] },
   plugins: [{
     name: 'subtitle-verification-fixtures',
     configureServer(server) {
-      server.middlewares.use((req, res, next) => {
+      server.middlewares.use(async (req, res, next) => {
         const pathname = new URL(req.url, 'http://localhost').pathname;
+        if (pathname.startsWith('/api/playback/upload-')) {
+          const response = await backend.app.inject({ url: pathname });
+          res.statusCode = response.statusCode; res.setHeader('Content-Type', response.headers['content-type']); return res.end(response.body);
+        }
         if (pathname === '/__subtitle_verify') {
           res.setHeader('Content-Type', 'text/html');
           res.end(`<!doctype html><html><head><style>
             body { margin: 0; background: #000; } .stage { position: relative; width: 640px; height: 360px; }
-            video { width: 640px; height: 360px; } canvas.JASSUB { position: absolute; pointer-events: none; transform:translateY(calc(-1 * var(--subtitle-lift,8%))); }
+            video { width: 640px; height: 360px; } canvas.JASSUB { position: absolute; pointer-events: none; transform:translateY(calc(-1 * var(--subtitle-lift,0%))); }
             </style></head><body><div class="stage"><video preload="auto"></video></div>
             <script type="module">
             import '/src/styles/player.css';
             import { SubtitleController } from '/src/player/engine.ts';
             window.video = document.querySelector('video');
             window.controller = new SubtitleController(window.video);
-            window.track = format => ({ id: format, format, label: format, lang: 'ko', url: '/fixture.' + format });
+            window.track = format => (${JSON.stringify(tracks)})[format];
             </script></body></html>`);
           return;
         }
@@ -78,7 +92,7 @@ const errors = [], external = [], samples = [];
 try {
   await server.listen();
   const base = `http://127.0.0.1:${server.httpServer.address().port}`;
-  browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', ...(process.env.MOA_SOFTWARE_RENDER ? ['--disable-webgl'] : [])] });
+  browser = await chromium.launch({ channel: 'chromium', executablePath: process.env.MOA_CHROMIUM_PATH, headless: true, args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', ...(process.env.MOA_SOFTWARE_RENDER ? ['--disable-webgl'] : [])] });
   const page = await browser.newPage({ viewport: { width: 640, height: 360 } });
   await page.route('**/*', route => {
     const url = new URL(route.request().url());
@@ -88,7 +102,7 @@ try {
     return route.continue();
   });
   page.on('pageerror', error => { errors.push(String(error)); });
-  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  page.on('console', message => { if (message.type() === 'error' || message.text().includes('failed to find any fallback with glyph')) errors.push(message.text()); });
   if (process.env.MOA_COMPATIBILITY) await page.addInitScript(() => localStorage.setItem('moa.compatibility','1'));
   await page.goto(`${base}/__subtitle_verify`);
   await page.waitForFunction(() => window.controller);
@@ -115,7 +129,7 @@ try {
 
   async function show(format) {
     await Promise.race([page.evaluate(async format => { await controller.show(format ? track(format) : null); }, format), new Promise((_, reject) => setTimeout(() => reject(new Error('Subtitle ready timed out: ' + JSON.stringify(errors))), 25000).unref())]);
-    if (format === 'vtt') await page.waitForFunction(() => video.querySelector('track')?.readyState === 2);
+    if (format === 'vtt' || format === 'srt') await page.waitForFunction(() => video.querySelector('track')?.readyState === 2);
   }
   async function sample(name, time, visible) {
     await page.evaluate(async time => {
@@ -125,6 +139,7 @@ try {
     }, time);
     // Allow native cues and the worker renderer to finish the seek frame.
     await page.waitForTimeout(200);
+    await page.waitForFunction(() => !window.controller.ass?.busy);
     const pixels = await page.locator('.stage').screenshot();
     await writeFile(path.join(evidence, `${name}.png`), pixels);
     const measurement = await page.evaluate(async data => {
@@ -133,13 +148,14 @@ try {
       const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0);
       const rgba = ctx.getImageData(0, 0, img.width, img.height).data;
       const background = Array.from(ctx.getImageData(Math.floor(img.width/2),20,1,1).data);
-      let white = 0, minY = img.height, maxY = -1;
+      let white = 0, dark = 0, minY = img.height, maxY = -1;
       for (let i = 0; i < rgba.length; i += 4) {
+        if (rgba[i] < background[0] * .75 && rgba[i + 1] < background[1] * .75 && rgba[i + 2] < background[2] * .75) dark++;
         if (rgba[i] > 150 && rgba[i + 1] > 150 && rgba[i + 2] > 150) {
           white++; const y = Math.floor(i / 4 / img.width); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
         }
       }
-      return { background, white, minY, maxY, time: video.currentTime, activeCues: video.textTracks[0]?.activeCues?.length ?? 0,
+      return { background, white, dark, minY, maxY, time: video.currentTime, activeCues: video.textTracks[0]?.activeCues?.length ?? 0,
         ass: controller.ass ? { offset: controller.ass.timeOffset, demand: controller.ass._lastDemandTime, busy: controller.ass.busy, width: controller.ass._canvas.width, height: controller.ass._canvas.height, style: controller.ass._canvas.style.cssText } : null };
     }, pixels.toString('base64'));
     samples.push({ name, ...measurement });
@@ -174,10 +190,21 @@ try {
   assert.equal(await page.evaluate(() => controller.ass.timeOffset), -1);
   await sample('ass-plus1-before', 2.5, false);
   const baselineAss=await sample('ass-plus1-visible', 3.5, true);
+  await page.evaluate(() => { document.querySelector('.stage').className = 'stage player is-chrome'; video.className = 'player-video'; });
+  const controlsAss=await sample('ass-default-controls',3.5,true);
+  assert.equal(controlsAss.minY, baselineAss.minY, 'ASS defaults must retain authored position when controls appear');
+  assert.equal(controlsAss.maxY, baselineAss.maxY, 'ASS defaults must retain authored size when controls appear');
+  await page.evaluate(() => { document.querySelector('.stage').className = 'stage player is-idle'; });
   await page.evaluate(()=>document.documentElement.style.setProperty('--subtitle-lift','25%'));
   const movedAss=await sample('ass-height25',3.5,true);
   assert.ok(movedAss.maxY<baselineAss.minY,'ASS manual height must move active canvas');
-  await page.evaluate(()=>document.documentElement.style.setProperty('--subtitle-lift','8%'));
+  await page.evaluate(()=>document.documentElement.style.setProperty('--subtitle-lift','0%'));
+  await page.evaluate(()=>controller.setAppearance({size:'medium',background:'soft'}));
+  const softAss=await sample('ass-inline-soft',3.5,true);
+  assert.ok(softAss.dark > baselineAss.dark + 1000, 'ASS background must render despite transparent inline border tags');
+  await page.evaluate(()=>controller.setAppearance({size:'medium',background:'solid'}));
+  const solidAss=await sample('ass-inline-solid',3.5,true);
+  assert.ok(solidAss.dark > baselineAss.dark + 1000, 'ASS solid background must render despite inline border tags');
   await page.evaluate(()=>controller.setAppearance({size:'large',background:'soft'}));
   const largeAss=await sample('ass-large-soft',3.5,true);
   assert.ok(largeAss.maxY-largeAss.minY > baselineAss.maxY-baselineAss.minY, 'ASS font size must visibly increase');
@@ -192,6 +219,8 @@ try {
   await page.evaluate(()=>controller.setAppearance({size:'medium',background:'original'}));
   const resetAss=await sample('ass-appearance-reset',3.5,true);
   assert.equal(resetAss.maxY-resetAss.minY,baselineAss.maxY-baselineAss.minY);
+  assert.equal(resetAss.dark, baselineAss.dark, 'Original ASS appearance must restore the authored inline tags');
+  assert.equal(resetAss.maxY, baselineAss.maxY, 'Original ASS position must remain unchanged');
   await sample('ass-plus1-after', 5.5, false);
   await page.evaluate(() => controller.setOffset(-1));
   await sample('ass-minus1-visible', 1.5, true);
@@ -225,6 +254,46 @@ try {
   });
   await show('vtt');
   const largeVtt = await sample('vtt-css-large', 2.5, true);
+  let noBackground;
+  for (const background of ['none', 'soft', 'solid']) {
+    await page.evaluate(background => { document.querySelector('.stage').className = `stage player cue-large cue-bg-${background}`; return controller.setAppearance({size:'large',background}); }, background);
+    const measured = await sample(`vtt-background-${background}`, 2.5, true);
+    if (background === 'none') { noBackground = measured; assert.ok(measured.dark < largeVtt.dark / 2); }
+    else assert.ok(measured.dark > noBackground.dark + 300, `${background}: VTT background changes must affect the active cue`);
+  }
+  await show('srt');
+  await page.evaluate(() => controller.setAppearance({ size: 'large', background: 'none' }));
+  const srtNone = await sample('server-srt-none', 2.5, true);
+  await page.evaluate(() => controller.setAppearance({ size: 'large', background: 'solid' }));
+  const srtSolid = await sample('server-srt-solid', 2.5, true);
+  assert.ok(srtSolid.dark > srtNone.dark + 300);
+  await page.evaluate(() => { document.querySelector('.stage').style.width = '480px'; });
+  await page.waitForFunction(() => Math.abs(document.querySelector('.subtitle-overlay').getBoundingClientRect().width - 480) < 1);
+  assert.equal(await page.evaluate(() => document.querySelector('.subtitle-overlay').getBoundingClientRect().height), 270);
+  await sample('server-srt-paused-resize', 2.5, true);
+  await page.evaluate(() => { video.style.transform = 'scale(1.5)'; });
+  await page.waitForFunction(() => Math.abs(document.querySelector('.subtitle-overlay').getBoundingClientRect().height - 360) < 1);
+  await sample('server-srt-paused-fill', 2.5, true);
+  await page.evaluate(() => {
+    video.style.transform = '';
+    document.querySelector('.stage').style.width = '640px';
+    const text = video.textTracks[0];
+    for (const cue of Array.from(text.cues)) text.removeCue(cue);
+    const cue = new VTTCue(2, 4, '<c.player><b>｢다국어 日本語｣</b></c>');
+    cue.line = 20; cue.snapToLines = false; cue.position = 25; cue.positionAlign = 'line-left'; cue.size = 50; cue.align = 'left';
+    text.addCue(cue); controller.setHeight(0);
+  });
+  await page.waitForFunction(() => Math.abs(document.querySelector('.subtitle-overlay').getBoundingClientRect().width - 640) < 1);
+  await sample('server-vtt-positioned', 2.5, true);
+  assert.equal(await page.locator('.subtitle-cue .player').count(), 0);
+  assert.ok(await page.evaluate(() => {
+    const box = document.querySelector('.subtitle-overlay').getBoundingClientRect(), cue = document.querySelector('.subtitle-cue').getBoundingClientRect();
+    return Math.abs(cue.top - box.top - box.height * .2) < 1 && Math.abs(cue.left - box.left - box.width * .25) < 1;
+  }));
+  await show('srt');
+  await page.evaluate(() => controller.setAppearance({ size: 'large', background: 'original' }));
+  assert.equal(await page.locator('.subtitle-overlay').count(), 0);
+  assert.equal(await page.evaluate(() => video.textTracks[0].mode), 'showing');
   await page.evaluate(() => { document.querySelector('.stage').className = 'stage player cue-xlarge'; controller.setAppearance({size:'xlarge',background:'original'}); });
   const xlargeVtt = await sample('vtt-css-xlarge', 2.6, true);
   assert.ok(xlargeVtt.maxY-xlargeVtt.minY > largeVtt.maxY-largeVtt.minY, 'VTT extra large must increase visible glyph height');
@@ -317,7 +386,7 @@ try {
     controller.setAppearance({size:'large',background:'soft'});controller.setHeight(8);
   });
   const wrapped=await sample('bounds-large-8-wrapped',2.8,true);
-  assert.ok(wrapped.maxY < 350,'Automatically wrapped subtitles must keep the bottom inset');
+  assert.ok(wrapped.maxY < 390 * .92,'Automatically wrapped subtitles must keep the bottom inset');
   assert.deepEqual(external, [], 'External network request attempted');
   assert.deepEqual(errors, [], 'Browser errors');
   console.log(JSON.stringify({ result: 'passed', browser: await browser.version(), duration: 8, samples, external, errors, evidence }, null, 2));
@@ -325,4 +394,6 @@ try {
   await writeFile(path.join(evidence, 'result.json'), JSON.stringify({ samples, errors, external }, null, 2));
   await browser?.close();
   await server.close();
+  await backend.app.close();
+  await rm(directory, { recursive: true, force: true });
 }

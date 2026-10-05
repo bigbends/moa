@@ -1,7 +1,9 @@
+import { WebsitePlugins } from '../components/WebsitePlugins';
+import { SubtitleLibrarySettings } from '../components/SubtitleLibrarySettings';
 import { remotePreference, setRemotePreference, type RemotePreference } from "../lib/remote";
 import { NavigationSettings } from "../components/NavigationSettings";
 import { devicePrefs, setDevicePref, type DevicePrefs } from "../lib/device-prefs";
-import { Globe, Info, ChevronRight, Folder, FolderOpen, FolderPlus, RefreshCw, Trash2, Tv, X } from "lucide-react";
+import { Globe, Info, ChevronRight, Folder, FolderOpen, FolderPlus, Puzzle, RefreshCw, Subtitles, Trash2, Tv, X } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -9,11 +11,12 @@ import type { LibraryFolder, MediaType, ScanStatus, Settings } from "@moa/shared
 import { NetworkSettings } from "../components/NetworkSettings";
 import { TmdbSettings } from "../components/TmdbSettings";
 import { TranslationSettings } from "../components/TranslationSettings";
+import { UpdateSettings } from "../components/UpdateSettings";
 import { SubtitleAdvancedSettings } from "../components/SubtitleAdvancedSettings";
 import { translationModeOf, useTranslationConfig, type TranslationMode } from "../api/translation";
 import { keys, useFolders, useMe, useScanStatus, useSettings } from "../api/queries";
 import { AccountSection } from "./AccountsPage";
-import { Button, EmptyState, IconButton, Skeleton, Spinner } from "../components/ui";
+import { Button, ConfirmDialog, EmptyState, IconButton, Select, Skeleton, Spinner } from "../components/ui";
 import { api, currentProfileId, hasLoginGate } from "../lib/api";
 import { TYPE_LABEL, cx } from "../lib/format";
 
@@ -75,6 +78,9 @@ export function LibraryPage() {
   const client = useQueryClient();
   const [picking, setPicking] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [deleting, setDeleting] = useState<LibraryFolder | null>(null);
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState(false);
   const status = useScanStatus(scanning);
   useEffect(() => {
     if (!scanning || !status.data || status.data.running) return;
@@ -90,10 +96,14 @@ export function LibraryPage() {
     void scan();
   };
   const remove = async (folder: LibraryFolder) => {
-    if (!confirm(`'${folder.label}' 폴더를 라이브러리에서 뺄까요? 파일은 삭제되지 않습니다.`)) return;
-    await api(`/library/folders/${folder.id}`, { method: "DELETE" });
-    void client.invalidateQueries({ queryKey: keys.folders });
-    void client.invalidateQueries({ queryKey: ["home"] });
+    setRemoving(true); setRemoveError(false);
+    try {
+      await api(`/library/folders/${folder.id}`, { method: "DELETE" });
+      setDeleting(null);
+      void client.invalidateQueries({ queryKey: keys.folders });
+      void client.invalidateQueries({ queryKey: ["home"] });
+    } catch { setRemoveError(true); }
+    finally { setRemoving(false); }
   };
   return (
     <div className="page-pad narrow">
@@ -116,11 +126,12 @@ export function LibraryPage() {
               <span>{TYPE_LABEL[folder.type]} · 작품 {folder.itemCount}개{folder.lastScanAt ? ` · ${new Date(folder.lastScanAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })} 스캔` : ""}</span>
               <small>{folder.path}</small>
             </div>
-            <IconButton label="폴더 빼기" onClick={() => void remove(folder)}><Trash2 size={18} /></IconButton>
+            <IconButton label="폴더 빼기" onClick={() => { setRemoveError(false); setDeleting(folder); }}><Trash2 size={18} /></IconButton>
           </li>
         ))}
       </ul>
       {picking && <FolderPicker onPick={(path, type, label) => void add(path, type, label)} onClose={() => setPicking(false)} />}
+      {deleting && <ConfirmDialog title="라이브러리 폴더 제거" confirmLabel="제거" busy={removing} onClose={() => setDeleting(null)} onConfirm={() => void remove(deleting)}>‘{deleting.label}’ 폴더를 라이브러리에서 뺄까요? 파일은 삭제되지 않습니다.{removeError && <p className="settings-error" role="alert">폴더를 빼지 못했어요. 다시 시도해 주세요.</p>}</ConfirmDialog>}
     </div>
   );
 }
@@ -131,8 +142,8 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (val
 
 const MODE_TEXT: Record<TranslationMode, string> = {
   manual: "재생 중 자막 메뉴에서 ‘한국어로 번역’을 누를 때만 번역해요.",
-  ask: "번역할 자막을 찾아 물어봐요. 영상에 외국어 자막이 없으면 외부 사이트 Jimaku에서 일본어 자막을 찾아요. ‘번역하기’를 누를 때만 자막 내용과 작품 정보가 Gemini로 전송되고 사용료가 발생해요.",
-  auto: "확실한 영어·일본어 자막을 바로 번역해요. 필요하면 외부 사이트 Jimaku에서 일본어 자막을 찾고, 자막 내용과 작품 정보가 Gemini로 전송돼 사용료가 발생해요. 확실하지 않은 자막은 물어봐요."
+  ask: "번역할 자막을 찾아 물어봐요. 영상에 외국어 자막이 없으면 외부 사이트 Jimaku에서 일본어 자막을 찾아요. ‘번역하기’를 누를 때만 자막 내용과 작품 정보가 설정한 AI 서비스로 전송되고 사용료가 발생해요.",
+  auto: "확실한 영어·일본어 자막을 바로 번역해요. 필요하면 외부 사이트 Jimaku에서 일본어 자막을 찾고, 자막 내용과 작품 정보가 설정한 AI 서비스로 전송돼 사용료가 발생해요. 확실하지 않은 자막은 물어봐요."
 };
 
 /** Per profile; the admin switch and keys live in the translation section below. */
@@ -144,11 +155,7 @@ function TranslationModeRow({ mode, available, korean, onChange }: { mode: Trans
         <small>{available ? MODE_TEXT[mode] : "관리자가 AI 자막 번역을 켜면 고를 수 있어요."}</small>
         {available && mode !== "manual" && !korean && <small className="is-warn">기본 자막 언어가 한국어일 때만 동작해요.</small>}
       </div>
-      <select className="setting-select" aria-label="AI 자막 번역 방식" value={mode} disabled={!available} onChange={event => onChange(event.target.value as TranslationMode)}>
-        <option value="manual">직접 번역</option>
-        <option value="ask">번역할지 묻기</option>
-        <option value="auto">자동 번역</option>
-      </select>
+      <Select className="setting-select" aria-label="AI 자막 번역 방식" value={mode} disabled={!available} onChange={value => onChange(value as TranslationMode)} options={[{ value: "manual", label: "직접 번역" }, { value: "ask", label: "번역할지 묻기" }, { value: "auto", label: "자동 번역" }]} />
     </div>
   );
 }
@@ -188,9 +195,7 @@ export function SettingsPage() {
     <div className="setting"><div><b>{title}</b><small>{desc}</small></div>{control}</div>
   );
   const select = <K extends keyof Settings>(key: K, options: Array<[Settings[K], string]>) => (
-    <select className="setting-select" aria-label={String(key)} value={String(s[key])} onChange={event => void save({ [key]: (typeof s[key] === "number" ? Number(event.target.value) : event.target.value) } as Partial<Settings>)}>
-      {options.map(([value, label]) => <option key={String(value)} value={String(value)}>{label}</option>)}
-    </select>
+    <Select className="setting-select" aria-label={String(key)} value={String(s[key])} onChange={value => void save({ [key]: (typeof s[key] === "number" ? Number(value) : value) } as Partial<Settings>)} options={options.map(([value, label]) => ({ value: String(value), label }))} />
   );
   const link = (to: string, icon: React.ReactNode, title: string, desc: string) => (
     <Link to={to} className="setting setting-link"><span className="setting-icon">{icon}</span><div><b>{title}</b><small>{desc}</small></div><ChevronRight size={18} /></Link>
@@ -221,10 +226,10 @@ export function SettingsPage() {
       <section className="settings-group"><h2>이 기기</h2><div className="settings-card">
         {row("재생 시 전체 화면", "작품을 누르면 바로 전체 화면으로 재생합니다. 끄면 재생 화면에서 직접 전환해요.", <Toggle label="재생 시 전체 화면" checked={device.fullscreenOnPlay} onChange={value => setPref("fullscreenOnPlay", value)} />)}
         {row("오프닝·엔딩 자동 건너뛰기", "구간 정보가 있는 회차에서 오프닝과 엔딩을 알아서 넘깁니다. 되감으면 다시 볼 수 있어요.", <Toggle label="오프닝·엔딩 자동 건너뛰기" checked={device.autoSkip} onChange={value => setPref("autoSkip", value)} />)}
-        {row("빠른 탐색 간격", "두 번 탭, 앞으로·뒤로 버튼과 J·L 키로 이동하는 시간", <select className="setting-select" aria-label="빠른 탐색 간격" value={device.seekStep} onChange={e => setPref("seekStep", Number(e.target.value) as DevicePrefs["seekStep"])}>{[5, 10, 15, 30].map(v => <option key={v} value={v}>{v}초</option>)}</select>)}
+        {row("빠른 탐색 간격", "두 번 탭, 앞으로·뒤로 버튼과 J·L 키로 이동하는 시간", <Select className="setting-select" aria-label="빠른 탐색 간격" value={String(device.seekStep)} onChange={value => setPref("seekStep", Number(value) as DevicePrefs["seekStep"])} options={[5, 10, 15, 30].map(value => ({ value: String(value), label: `${value}초` }))} />)}
         {row("작품별 자막 싱크 기억", "자막 싱크를 조절하면 같은 작품의 다음 회차에도 그대로 적용합니다.", <Toggle label="작품별 자막 싱크 기억" checked={device.rememberSubOffset} onChange={value => setPref("rememberSubOffset", value)} />)}
         {row("화면 채우기", "영상을 화면 비율에 맞춰 꽉 채웁니다. 가장자리가 조금 잘릴 수 있어요.", <Toggle label="화면 채우기" checked={device.videoFill} onChange={value => setPref("videoFill", value)} />)}
-        {row("TV 리모컨 모드", "방향키로 이동하고 확인 버튼으로 선택합니다. 자동 모드는 TV 감지 또는 탐색 화면의 방향키 입력으로 켜집니다.", <select className="setting-select" aria-label="TV 리모컨 모드" value={remote} onChange={e => { const value=e.target.value as RemotePreference; setRemote(value); setRemotePreference(value); }}><option value="auto">자동</option><option value="on">항상 켜기</option><option value="off">끄기</option></select>)}
+        {row("TV 리모컨 모드", "방향키로 이동하고 확인 버튼으로 선택합니다. 자동 모드는 TV 감지 또는 탐색 화면의 방향키 입력으로 켜집니다.", <Select className="setting-select" aria-label="TV 리모컨 모드" value={remote} onChange={value => { setRemote(value as RemotePreference); setRemotePreference(value as RemotePreference); }} options={[{ value: "auto", label: "자동" }, { value: "on", label: "항상 켜기" }, { value: "off", label: "끄기" }]} />)}
       </div></section>
       <section className="settings-group"><h2>실험 기능</h2><div className="settings-card">
         {row("다른 소스 시즌 모아보기", "작품 상세의 시즌 메뉴에 다른 소스에 있는 정규 시즌까지 모아 순서대로 보여줘요. 시즌을 찾는 동안 목록이 늦게 채워질 수 있어요.", <Toggle label="다른 소스 시즌 모아보기" checked={device.seasonSwitcher} onChange={value => setPref("seasonSwitcher", value)} />)}
@@ -232,6 +237,10 @@ export function SettingsPage() {
       </div></section>
       <section className="settings-group"><h2>정보</h2><div className="settings-card">{link("/about", <Info size={20} />, "정보/크레딧", "작품 정보 제공 및 오픈소스 라이선스")}</div></section>
       <NavigationSettings />
+      <section className="settings-group"><h2>플러그인과 자막</h2><div className="settings-card">
+        {link("/plugins", <Puzzle size={20} />, "플러그인", "추가 기능 실행과 설치·업데이트")}
+        {admin && link("/subtitles", <Subtitles size={20} />, "저장한 자막", "AI 번역·온라인·직접 가져온 자막 관리")}
+      </div></section>
       {admin && <><section className="settings-group">
         <h2>소스와 라이브러리</h2>
         <div className="settings-card">
@@ -242,8 +251,18 @@ export function SettingsPage() {
         </div>
         <p className="settings-hint">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
       </section>
+      <UpdateSettings />
       <TranslationSettings />
       <NetworkSettings /></>}
     </div>
   );
+}
+
+export function PluginsPage() {
+  const me = useMe();
+  return <div className="page-pad narrow"><header className="page-head"><h1>플러그인</h1></header>{me.isPending ? <Skeleton className="settings-sk" /> : <WebsitePlugins admin={me.data?.role === 'admin'} />}</div>;
+}
+
+export function SubtitlesPage() {
+  return <div className="page-pad narrow"><header className="page-head"><h1>자막 관리</h1></header><SubtitleLibrarySettings /></div>;
 }

@@ -6,10 +6,12 @@ import type { TranslationConfig, TranslationJob, SubtitleTrack } from '@moa/shar
 import { Store } from '../db.js';
 import { Catalog } from '../catalog.js';
 import { ApiFailure } from '../util.js';
-import { Gemini, MODEL, validModel, validGeminiKey } from './gemini.js';
+import { Gemini, MODEL, ENDPOINTS, validModel, validKey, normalizeEndpoint } from './gemini.js';
 import { subtitleDocument, nextBatch, translatedRanges, type Document } from './subtitle.js';
 
 interface Secret {
+  provider: TranslationConfig['provider'];
+  baseUrl: string;
   apiKeys: string[];
   model: string;
   enabled: boolean;
@@ -25,6 +27,8 @@ interface Job extends TranslationJob {
   priorityAt?: number;
 }
 interface Work {
+  provider: TranslationConfig['provider'];
+  baseUrl: string;
   key: string;
   document: Document;
   title: string;
@@ -68,6 +72,8 @@ export class Translations {
   private closed = false;
   private cooldown = new Map<string, number>();
   private preferredKey = 0;
+  private keyTests = new Map<string, { ok: boolean; error?: string }>();
+  private testingKeys = new Set<string>();
   private lastTranslationFinishedAt = 0;
   private janitor: NodeJS.Timeout;
   constructor(
@@ -77,14 +83,16 @@ export class Translations {
     private gemini = new Gemini(),
   ) {
     this.filename = path.join(dataDir, 'translation-secret.json');
-    this.secret = { apiKeys: [], model: MODEL, enabled: false, batchSize: 120, requestIntervalMs: 1000, retryCount: 2 };
+    this.secret = { provider: 'gemini', baseUrl: ENDPOINTS.gemini, apiKeys: [], model: MODEL, enabled: false, batchSize: 120, requestIntervalMs: 1000, retryCount: 2 };
     try {
       const saved = JSON.parse(readFileSync(this.filename, 'utf8'));
       const keys = (Array.isArray(saved.apiKeys) ? saved.apiKeys : saved.apiKey ? [saved.apiKey] : [])
-        .filter(validGeminiKey)
+        .filter(validKey)
         .slice(0, 8);
       if (validModel(saved.model))
         this.secret = {
+          provider: saved.provider === 'openai' ? 'openai' : 'gemini',
+          baseUrl: normalizeEndpoint(saved.baseUrl ?? ENDPOINTS[saved.provider === 'openai' ? 'openai' : 'gemini']),
           apiKeys: keys,
           model: saved.model,
           enabled: saved.enabled === true && keys.length > 0,
@@ -97,7 +105,7 @@ export class Translations {
         };
       chmodSync(this.filename, 0o600);
     } catch (error: any) {
-      this.secret = { apiKeys: [], model: MODEL, enabled: false, batchSize: 120, requestIntervalMs: 1000, retryCount: 2 };
+      this.secret = { provider: 'gemini', baseUrl: ENDPOINTS.gemini, apiKeys: [], model: MODEL, enabled: false, batchSize: 120, requestIntervalMs: 1000, retryCount: 2 };
       if (error.code !== 'ENOENT') console.warn('translation-config-unreadable: translation disabled');
     }
     db.db
@@ -120,6 +128,8 @@ export class Translations {
   }
   config(): TranslationConfig {
     return {
+      provider: this.secret.provider,
+      baseUrl: this.secret.baseUrl,
       configured: !!this.secret.apiKeys.length,
       enabled: this.secret.enabled,
       model: this.secret.model,
@@ -128,11 +138,14 @@ export class Translations {
       retryCount: this.secret.retryCount,
       keys: this.secret.apiKeys.map((key, i) => ({
         id: digest(key).slice(0, 16),
+        test: this.keyTests.get(digest(key).slice(0, 16)),
         label: `키 ${i + 1} · …${key.slice(-4)}`,
       })),
     };
   }
   configure(update: {
+    provider?: TranslationConfig['provider'];
+    baseUrl?: string;
     apiKey?: string;
     model?: string;
     enabled?: boolean;
@@ -144,9 +157,20 @@ export class Translations {
     removeKeyIds?: string[];
   }): TranslationConfig {
     const next = { ...this.secret, apiKeys: [...this.secret.apiKeys] };
+    if (update.provider !== undefined) {
+      if (!['gemini', 'openai'].includes(update.provider)) throw new ApiFailure(400, 'translation-config-invalid');
+      next.provider = update.provider;
+    }
+    if (next.provider !== this.secret.provider) {
+      next.baseUrl = ENDPOINTS[next.provider];
+      next.model = next.provider === 'gemini' ? MODEL : 'gpt-4.1-mini';
+    }
+    if (update.baseUrl !== undefined) next.baseUrl = normalizeEndpoint(update.baseUrl);
+    const endpointChanged = next.provider !== this.secret.provider || next.baseUrl !== this.secret.baseUrl;
+    if (endpointChanged) { next.apiKeys = []; next.enabled = false; }
     if (update.apiKey !== undefined) {
       const key = update.apiKey.trim();
-      if (!validGeminiKey(key)) throw new ApiFailure(400, 'translation-key-invalid');
+      if (!validKey(key)) throw new ApiFailure(400, 'translation-key-invalid');
       next.apiKeys = [key];
     }
     if (update.clearKey) next.apiKeys = [];
@@ -154,7 +178,7 @@ export class Translations {
       next.apiKeys = next.apiKeys.filter((key) => !update.removeKeyIds!.includes(digest(key).slice(0, 16)));
     for (const input of update.addKeys || []) {
       const key = input.trim();
-      if (!validGeminiKey(key)) throw new ApiFailure(400, 'translation-key-invalid');
+      if (!validKey(key)) throw new ApiFailure(400, 'translation-key-invalid');
       if (!next.apiKeys.includes(key)) next.apiKeys.push(key);
     }
     if (next.apiKeys.length > 8) throw new ApiFailure(400, 'translation-too-many-keys');
@@ -178,17 +202,49 @@ export class Translations {
     writeFileSync(this.filename + '.tmp', JSON.stringify(next), { mode: 0o600 });
     chmodSync(this.filename + '.tmp', 0o600);
     renameSync(this.filename + '.tmp', this.filename);
+    if (endpointChanged || next.model !== this.secret.model) this.keyTests.clear();
+    for (const id of this.keyTests.keys()) if (!next.apiKeys.some(key => digest(key).slice(0, 16) === id)) this.keyTests.delete(id);
     this.secret = next;
     this.cooldown.clear();
     this.preferredKey = 0;
-    if (!next.enabled)
+    if (!next.enabled || endpointChanged)
       for (const job of this.jobs.values())
         if (job.state === 'queued' || job.state === 'running') this.cancel(job.id, job.profile);
     return this.config();
   }
   async models(): Promise<{ models: string[] }> {
     if (!this.secret.apiKeys.length) throw new ApiFailure(400, 'translation-not-configured');
-    return { models: await this.withKey((key) => this.gemini.models(key, AbortSignal.timeout(15000))) };
+    const endpoint = this.secret;
+    return { models: await this.withKey((key) => this.gemini.models(key, AbortSignal.timeout(15000), endpoint)) };
+  }
+  async testKey(id: string): Promise<TranslationConfig> {
+    const endpoint = this.secret;
+    const key = endpoint.apiKeys.find(key => digest(key).slice(0, 16) === id);
+    if (!key) throw new ApiFailure(404, 'translation-key-not-found');
+    if (this.testingKeys.has(id)) throw new ApiFailure(409, 'translation-test-running');
+    this.testingKeys.add(id);
+    let result: { ok: boolean; error?: string } = { ok: false, error: 'translation-unavailable' };
+    try {
+      for (let attempt = 0; attempt <= endpoint.retryCount; attempt++) {
+        if (this.secret !== endpoint) throw new ApiFailure(409, 'translation-config-changed');
+        try {
+          await this.gemini.translate(key, endpoint.model, [{ id: 0, text: 'Hello.' }], { title: '', sourceLanguage: 'en' }, AbortSignal.timeout(30000), endpoint);
+          result = { ok: true };
+          break;
+        } catch (error) {
+          const code = error instanceof ApiFailure ? error.error === 'translation-cancelled' ? 'translation-timeout' : error.error : 'translation-unavailable';
+          result = { ok: false, error: code };
+          if (attempt === endpoint.retryCount || !['translation-unavailable', 'translation-timeout', 'translation-quota', 'translation-invalid-response', 'translation-incomplete'].includes(code)) break;
+          await delay(250 * 2 ** attempt);
+        }
+      }
+    } finally {
+      this.testingKeys.delete(id);
+    }
+    if (this.secret !== endpoint) throw new ApiFailure(409, 'translation-config-changed');
+    this.keyTests.set(id, result);
+    if (result.ok) this.cooldown.delete(key);
+    return this.config();
   }
   private async withKey<T>(operation: (key: string) => Promise<T>): Promise<T> {
     const keys = [...this.secret.apiKeys];
@@ -208,9 +264,9 @@ export class Translations {
         this.preferredKey = index;
         return result;
       } catch (error) {
-        if (!(error instanceof ApiFailure) || !['translation-quota', 'translation-key-invalid'].includes(error.error))
+        if (!(error instanceof ApiFailure) || !['translation-quota', 'translation-credit-exhausted', 'translation-key-invalid', 'translation-permission-denied'].includes(error.error))
           throw error;
-        this.cooldown.set(key, error.error === 'translation-key-invalid' ? Infinity : Date.now() + 60000);
+        this.cooldown.set(key, ['translation-key-invalid', 'translation-permission-denied'].includes(error.error) ? Infinity : Date.now() + 60000);
         last = error;
       }
     }
@@ -219,7 +275,7 @@ export class Translations {
   /** One shared worker serializes generation, including key failover and inter-job spacing. */
   private async translateWithRetry<T>(operation: (key: string) => Promise<T>, signal: AbortSignal): Promise<T> {
     const retryCount = this.secret.retryCount;
-    const retryable = new Set(['translation-quota', 'translation-key-invalid', 'translation-unavailable', 'translation-invalid-response', 'translation-incomplete']);
+    const retryable = new Set(['translation-quota', 'translation-credit-exhausted', 'translation-key-invalid', 'translation-permission-denied', 'translation-unavailable', 'translation-invalid-response', 'translation-incomplete']);
     let last: unknown = new ApiFailure(502, 'translation-quota');
     for (let attempt = 0; attempt <= retryCount; attempt++) {
       signal.throwIfAborted();
@@ -242,8 +298,8 @@ export class Translations {
       } catch (error) {
         last = error;
         if (!(error instanceof ApiFailure) || !retryable.has(error.error) || signal.aborted) throw error;
-        if (error.error === 'translation-key-invalid' || error.error === 'translation-quota') {
-          this.cooldown.set(key, error.error === 'translation-key-invalid' ? Infinity : Date.now() + 60000);
+        if (['translation-key-invalid', 'translation-permission-denied', 'translation-quota', 'translation-credit-exhausted'].includes(error.error)) {
+          this.cooldown.set(key, ['translation-key-invalid', 'translation-permission-denied'].includes(error.error) ? Infinity : Date.now() + 60000);
           this.preferredKey = (index + 1) % keys.length;
         }
       } finally {
@@ -276,7 +332,9 @@ export class Translations {
       language = (input.sourceLanguage || 'auto').slice(0, 32),
       model = this.secret.model;
     // Include the original bytes and context: different edits/offsets never share output.
-    const key = digest(JSON.stringify(['ko-v1', input.content, document.format, title, language, model]));
+    const context = ['ko-v1', input.content, document.format, title, language, model];
+    if (this.secret.provider !== 'gemini' || this.secret.baseUrl !== ENDPOINTS.gemini) context.push(this.secret.provider, this.secret.baseUrl);
+    const key = digest(JSON.stringify(context));
     for (const job of this.jobs.values())
       if (
         job.key === key &&
@@ -322,6 +380,8 @@ export class Translations {
       let work = this.work.get(key);
       if (!work) {
         work = {
+          provider: this.secret.provider,
+          baseUrl: this.secret.baseUrl,
           key,
           document,
           title,
@@ -454,6 +514,7 @@ export class Translations {
               missing,
               { title: work.title, sourceLanguage: work.language, previous },
               work.controller.signal,
+              work,
             ),
             work.controller.signal,
           );
@@ -547,6 +608,12 @@ export class Translations {
     if (!row || track !== `translation.${row.format}`) throw new ApiFailure(404, 'subtitle-not-found');
     asset.touched = Date.now();
     return row;
+  }
+  removeSaved(key: string) {
+    if (this.work.has(key)) throw new ApiFailure(409, 'translation-running');
+    this.db.run('DELETE FROM translation_cache WHERE key=?', key);
+    for (const [id, job] of this.jobs) if (job.key === key) this.jobs.delete(id);
+    for (const [id, asset] of this.assets) if (asset.key === key) this.assets.delete(id);
   }
   private prune() {
     const cutoff = Date.now() - TTL;

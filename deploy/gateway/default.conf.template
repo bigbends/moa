@@ -69,6 +69,13 @@ server {
   }
   location = /robots.txt { auth_request off; default_type text/plain; return 200 "User-agent: *\nDisallow: /\n"; }
   location = /manifest.webmanifest { auth_request off; proxy_pass http://moa_app; }
+  location ^~ /api/cast/ {
+    auth_request off;
+    access_log off;
+    limit_except GET OPTIONS { deny all; }
+    proxy_pass http://moa_app;
+    proxy_http_version 1.1;
+  }
   location ~ ^/icon(-maskable)?\.svg$ { auth_request off; proxy_pass http://moa_app; }
   location / {
     proxy_pass http://moa_app;

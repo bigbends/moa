@@ -46,21 +46,21 @@ export const sourceLanguage = (lang?: string) => (lang ? SOURCE_LANG[lang.toLowe
 const tooLarge = (content: string) => new TextEncoder().encode(content).length > TRANSLATION_MAX_BYTES;
 
 /** Reads a session track the same way the player does: same-origin URLs carry the profile and cookies. */
-export async function readTrack(track: SubtitleTrack, signal: AbortSignal) {
+export async function readTrack(track: SubtitleTrack, signal: AbortSignal, maxBytes = TRANSLATION_MAX_BYTES) {
   const url = new URL(track.url, location.href);
   const headers: Record<string, string> = {};
   const profile = currentProfileId();
   if (profile && url.origin === location.origin) headers[PROFILE_HEADER] = profile;
   const response = await fetch(url, { headers, credentials: "same-origin", signal });
   if (!response.ok) throw new TranslationReadError("원문 자막을 읽지 못했어요. 다른 자막을 골라 주세요.");
-  if (Number(response.headers.get("content-length")) > TRANSLATION_MAX_BYTES) { await response.body?.cancel(); throw new TranslationReadError(translationErrorMessage("translation-subtitle-too-large")); }
+  if (Number(response.headers.get("content-length")) > maxBytes) { await response.body?.cancel(); throw new TranslationReadError(translationErrorMessage("translation-subtitle-too-large")); }
   const reader = response.body?.getReader();
   if (!reader) throw new TranslationReadError("원문 자막을 읽지 못했어요.");
   const chunks: Uint8Array[] = []; let size = 0;
   while (true) {
     const { done, value } = await reader.read(); if (done) break;
     size += value.length;
-    if (size > TRANSLATION_MAX_BYTES) { await reader.cancel(); throw new TranslationReadError(translationErrorMessage("translation-subtitle-too-large")); }
+    if (size > maxBytes) { await reader.cancel(); throw new TranslationReadError(translationErrorMessage("translation-subtitle-too-large")); }
     chunks.push(value);
   }
   const bytes = new Uint8Array(size); let offset = 0;
@@ -230,10 +230,19 @@ export function useSubtitleTranslation(episodeId: string, onTrack: (track: Subti
   /** Stop following the job and drop it from this tab's resume list (the player cancels it separately). */
   const forget = useCallback(() => { run.current?.abort(); remember(null); }, [episodeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const handoff = (targetEpisode: string) => {
+    if (state.status !== 'active') return false;
+    try {
+      sessionStorage.setItem(jobKey(targetEpisode), JSON.stringify({ id: state.job.id, label: state.label, origin: state.origin }));
+      if (targetEpisode !== episodeId) sessionStorage.removeItem(jobKey(episodeId));
+      return true;
+    } catch { return false; }
+  };
+
   /** A job for this episode is running or was picked back up from earlier in this tab. */
   const busy = state.status === "reading" || state.status === "active";
   // Leaving the player stops watching the job; the server finishes and keeps the result.
   useEffect(() => () => run.current?.abort(), []);
 
-  return { state, start, cancel, prioritize, forget, busy };
+  return { state, start, cancel, prioritize, forget, handoff, busy };
 }

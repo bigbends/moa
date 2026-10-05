@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createServer } from 'node:http';
 import { subtitleDocument, batches } from '../src/translation/subtitle.js';
-import { Gemini } from '../src/translation/gemini.js';
+import { Gemini, ENDPOINTS, normalizeEndpoint } from '../src/translation/gemini.js';
 import { Translations } from '../src/translation/service.js';
 import { Catalog } from '../src/catalog.js';
 import { Store } from '../src/db.js';
@@ -12,7 +13,7 @@ import { buildApp } from '../src/app.js';
 import { ApiFailure } from '../src/util.js';
 const vtt = 'WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nHello\nworld\n\n00:00:04.000 --> 00:00:06.000\nGoodbye\n';
 const secret = 'test-key-not-a-real-key';
-const authKey = 'AQ.Ab' + 'x'.repeat(48); // Synthetic 53-character authorization key.
+const authKey = 'AQ.Ab' + 'x'.repeat(48);
 const standardKey = 'AIza' + 'y'.repeat(35);
 const success = (lines: any[]) =>
   Response.json({
@@ -168,7 +169,7 @@ test('Gemini auth and legacy keys survive configuration, restart and header-only
     for (const key of [authKey, standardKey]) assert.ok(!JSON.stringify(config).includes(key));
     assert.deepEqual(JSON.parse(await readFile(path.join(f.dir, 'translation-secret.json'), 'utf8')).apiKeys, [authKey, standardKey]);
     assert.equal((await stat(path.join(f.dir, 'translation-secret.json'))).mode & 0o777, 0o600);
-    for (const key of ['short', 'x'.repeat(257), 'AQ.Ab' + 'x '.repeat(24), authKey + '\r\nX-Test: invalid', authKey + '한글']) {
+    for (const key of ['', 'x'.repeat(513), 'AQ.Ab' + 'x '.repeat(24), authKey + '\r\nX-Test: invalid', authKey + '한글']) {
       assert.throws(() => f.service.configure({ addKeys: [key] }), /translation-key-invalid/);
     }
     await f.service.close();
@@ -181,7 +182,6 @@ test('Gemini auth and legacy keys survive configuration, restart and header-only
       restored.configure({ apiKey: standardKey });
       await restored.models();
     } finally { await restored.close(); }
-    // The original single-key disk format must also accept AQ. keys after restart.
     const saved = JSON.parse(await readFile(path.join(f.dir, 'translation-secret.json'), 'utf8'));
     delete saved.apiKeys;
     await writeFile(path.join(f.dir, 'translation-secret.json'), JSON.stringify({ ...saved, apiKey: authKey }));
@@ -350,9 +350,22 @@ test('routes enforce admin key writes, profile jobs, account assets and persist 
     });
     assert.equal(config.statusCode, 200);
     assert.ok(!config.body.includes(authKey));
+    const keyTestUrl = `/api/admin/translation/keys/${config.json().keys[0].id}/test`;
+    assert.equal((await env.app.inject({ method: 'POST', url: keyTestUrl, headers: { 'x-moa-account': 'member', 'x-moa-role': 'member' } })).statusCode, 403);
+    const keyTest = await env.app.inject({ method: 'POST', url: keyTestUrl });
+    assert.equal(keyTest.statusCode, 200);
+    assert.deepEqual(keyTest.json().keys[0].test, { ok: true });
+    assert.ok(!keyTest.body.includes(authKey));
+
     const limits = await env.app.inject({method:'PATCH',url:'/api/admin/translation/config',payload:{requestIntervalMs:0,retryCount:3}});
     assert.equal(limits.statusCode,200);assert.equal(limits.json().retryCount,3);
-    for (const payload of [{requestIntervalMs:-1},{requestIntervalMs:60001},{retryCount:6},{retryCount:1.5}]) {
+    const openai = await env.app.inject({ method: 'PATCH', url: '/api/admin/translation/config', payload: { provider: 'openai', baseUrl: 'https://translation.example/v1', apiKey: 'sk-' + 'a'.repeat(300), model: 'org/model:free', enabled: true } });
+    assert.equal(openai.statusCode, 200);
+    assert.equal(openai.json().provider, 'openai');
+    assert.equal(openai.json().baseUrl, 'https://translation.example/v1');
+    assert.ok(!openai.body.includes('a'.repeat(300)));
+    await env.app.inject({ method: 'PATCH', url: '/api/admin/translation/config', payload: { provider: 'gemini', apiKey: secret, enabled: true } });
+    for (const payload of [{provider:'invalid'},{baseUrl:'http://example.com/v1'},{apiKey:'bad\nkey'},{requestIntervalMs:-1},{requestIntervalMs:60001},{retryCount:6},{retryCount:1.5}]) {
       assert.equal((await env.app.inject({method:'PATCH',url:'/api/admin/translation/config',payload})).statusCode,400);
     }
 
@@ -610,4 +623,192 @@ test('removing a key during an active request does not break the following batch
     assert.equal((await wait(f.service, f.service.start('e', 'p', { ...input, content }).id)).state, 'completed');
     assert.deepEqual(used, [secret, 'second-key-stays-active']);
   } finally { await f.close(); }
+});
+
+
+test('OpenAI-compatible requests use the configured endpoint, bearer key and strict cue IDs', async () => {
+  const endpoint = { provider: 'openai' as const, baseUrl: 'https://translate.example/v1' };
+  const client = new Gemini(async (url, init) => {
+    assert.equal((init!.headers as Record<string, string>).Authorization, `Bearer ${secret}`);
+    assert.equal((init!.headers as Record<string, string>)['x-goog-api-key'], undefined);
+    assert.equal(init!.redirect, 'error');
+    assert.ok(!String(url).includes(secret));
+    if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'org/model:free' }, { id: 'bad?model' }, null] });
+    assert.equal(String(url), endpoint.baseUrl + '/chat/completions');
+    const body = JSON.parse(String(init!.body));
+    assert.equal(body.model, 'org/model:free');
+    assert.equal(body.messages[0].role, 'system');
+    assert.equal(body.response_format.type, 'json_object');
+    const lines = JSON.parse(body.messages[1].content).lines;
+    assert.deepEqual(Object.keys(lines[0]).sort(), ['id', 'text']);
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ lines: lines.map((line: any) => ({ id: line.id, text: '번역' })) }) } }] });
+  });
+  assert.deepEqual(await client.models(secret, new AbortController().signal, endpoint), ['org/model:free']);
+  assert.deepEqual(await client.translate(secret, 'org/model:free', [{ id: 7, text: 'Hello' }], { title: '', sourceLanguage: 'en' }, new AbortController().signal, endpoint), { '7': '번역' });
+  for (const content of ['null', '{"lines":[null]}', '{"lines":[{"id":8,"text":"잘못된 줄"}]}']) {
+    const invalid = new Gemini(async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content } }] }));
+    await assert.rejects(invalid.translate(secret, 'model', [{ id: 7, text: 'Hello' }], { title: '', sourceLanguage: '' }, new AbortController().signal, endpoint), /translation-incomplete/);
+  }
+  await assert.rejects(new Gemini().models(secret, new AbortController().signal, { ...endpoint, baseUrl: 'https://127.0.0.1' }), /translation-unavailable/);
+  for (const url of ['http://api.example/v1', 'https://key:secret@api.example/v1', 'https://api.example/v1?key=secret', 'https://api.example/#key'])
+    assert.throws(() => normalizeEndpoint(url), /translation-endpoint-invalid/);
+});
+
+test('provider changes clear old credentials, persist new settings and isolate cached translations', async () => {
+  let calls = 0;
+  const f = await fixture(async (url, init) => {
+    calls++;
+    if (String(url).includes('generativelanguage')) return fake(url, init);
+    assert.equal((init!.headers as Record<string, string>).Authorization, `Bearer ${'sk-' + 'a'.repeat(300)}`);
+    const lines = JSON.parse(JSON.parse(String(init!.body)).messages[1].content).lines;
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ lines: lines.map((line: any) => ({ id: line.id, text: '다른 번역' })) }) } }] });
+  });
+  try {
+    assert.equal((await wait(f.service, f.service.start('e', 'p', input).id)).state, 'completed');
+    const changed = f.service.configure({ provider: 'openai' });
+    assert.equal(changed.baseUrl, ENDPOINTS.openai);
+    assert.equal(changed.configured, false);
+    assert.equal(changed.enabled, false);
+    assert.equal(changed.model, 'gpt-4.1-mini');
+    f.service.configure({ baseUrl: 'https://translate.example/v1/', apiKey: 'sk-' + 'a'.repeat(300), enabled: true, model: 'org/model:free' });
+    const translated = await wait(f.service, f.service.start('e', 'p', input).id);
+    assert.equal(translated.state, 'completed');
+    assert.equal(translated.cached, false);
+    assert.equal(calls, 2);
+    const reopened = f.create();
+    try {
+      assert.equal(reopened.config().provider, 'openai');
+      assert.equal(reopened.config().baseUrl, 'https://translate.example/v1');
+      assert.equal(reopened.config().model, 'org/model:free');
+      assert.equal(reopened.config().configured, true);
+    } finally { await reopened.close(); }
+    assert.throws(() => f.service.configure({ apiKey: 'key\nheader' }), /translation-key-invalid/);
+    assert.throws(() => f.service.configure({ apiKey: '한글 키' }), /translation-key-invalid/);
+    assert.equal(f.service.configure({ baseUrl: 'https://other.example/v1' }).configured, false);
+  } finally { await f.close(); }
+});
+
+
+test('explicit key tests report safe per-key generation failures without failover or automatic requests', async () => {
+  const calls: string[] = [];
+  const errors = [
+    ['invalid-key-0001', 401, 'invalid_api_key', 'translation-key-invalid'],
+    ['denied-key-0002', 403, 'permission_denied', 'translation-permission-denied'],
+    ['credit-key-0003', 429, 'insufficient_quota', 'translation-credit-exhausted'],
+    ['quota-key-0004', 429, 'rate_limit_exceeded', 'translation-quota'],
+    ['model-key-0005', 404, 'model_not_found', 'translation-model-unavailable'],
+  ] as const;
+  const f = await fixture(async (url, init) => {
+    assert.match(String(url), /gemini-pro-latest:generateContent$/);
+    const key = (init!.headers as Record<string, string>)['x-goog-api-key'];
+    calls.push(key);
+    const lines = JSON.parse(JSON.parse(String(init!.body)).contents[0].parts[0].text).lines;
+    assert.deepEqual(lines, [{ id: 0, text: 'Hello.' }]);
+    const failure = errors.find(([value]) => value === key);
+    return failure ? Response.json({ error: { code: failure[2], message: key + secret } }, { status: failure[1] }) : success(lines);
+  });
+  try {
+    const configured = f.service.configure({ clearKey: true, addKeys: [...errors.map(([key]) => key), 'good-key-0006'], model: 'gemini-pro-latest', enabled: false });
+    assert.equal(calls.length, 0);
+    assert.ok(configured.keys.every(key => key.test === undefined));
+    for (let i = 0; i < configured.keys.length; i++) {
+      const result = await f.service.testKey(configured.keys[i].id);
+      assert.deepEqual(result.keys[i].test, i < errors.length ? { ok: false, error: errors[i][3] } : { ok: true });
+      assert.equal(calls.length, i + 1);
+      assert.ok(!JSON.stringify(result).includes(calls[i]));
+    }
+    assert.equal(f.db.get('SELECT COUNT(*) AS n FROM translation_cache').n, 0);
+    const retained = f.service.configure({ addKeys: ['new-key-0007'], batchSize: 80 });
+    assert.deepEqual(retained.keys[0].test, { ok: false, error: 'translation-key-invalid' });
+    assert.equal(retained.keys.at(-1)?.test, undefined);
+    const removed = configured.keys[0].id;
+    f.service.configure({ removeKeyIds: [removed] });
+    await assert.rejects(f.service.testKey(removed), /translation-key-not-found/);
+    assert.equal(calls.length, 6);
+    assert.ok(f.service.configure({ model: 'gemini-flash-latest' }).keys.every(key => key.test === undefined));
+  } finally { await f.close(); }
+});
+
+test('key test rejects duplicate requests and discards results after configuration changes', async () => {
+  let release!: () => void, calls = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const f = await fixture(async (url, init) => { calls++; await gate; return fake(url, init); });
+  try {
+    const id = f.service.config().keys[0].id;
+    const pending = f.service.testKey(id);
+    await assert.rejects(f.service.testKey(id), /translation-test-running/);
+    assert.equal(calls, 1);
+    f.service.configure({ baseUrl: 'https://other.example/v1beta', apiKey: secret });
+    release();
+    await assert.rejects(pending, /translation-config-changed/);
+    assert.equal(f.service.config().keys[0].test, undefined);
+    assert.deepEqual((await f.service.testKey(id)).keys[0].test, { ok: true });
+    f.service.configure({ removeKeyIds: [id] });
+    assert.equal(f.service.configure({ apiKey: secret }).keys[0].test, undefined);
+  } finally { release(); await f.close(); }
+});
+
+test('key tests retry transient failures, retain permanent errors and clear all stored keys', async () => {
+  const attempts = new Map<string, number>();
+  const f = await fixture(async (url, init) => {
+    const key = new Headers(init?.headers).get('x-goog-api-key')!;
+    const attempt = (attempts.get(key) ?? 0) + 1;
+    attempts.set(key, attempt);
+    if (key === 'invalid-key') return new Response('', { status: 401 });
+    if (key === 'unavailable-key') return new Response('', { status: 503 });
+    if (attempt === 1) throw new TypeError('fetch failed');
+    if (attempt === 2) return new Response('', { status: 503 });
+    return fake(url, init);
+  });
+  try {
+    const config = f.service.configure({ clearKey: true, addKeys: ['flaky-key', 'invalid-key', 'unavailable-key'], retryCount: 2, enabled: true });
+    await Promise.all(config.keys.map(key => f.service.testKey(key.id)));
+    assert.deepEqual(f.service.config().keys.map(key => key.test), [
+      { ok: true }, { ok: false, error: 'translation-key-invalid' }, { ok: false, error: 'translation-unavailable' },
+    ]);
+    assert.deepEqual(Object.fromEntries(attempts), { 'flaky-key': 3, 'invalid-key': 1, 'unavailable-key': 3 });
+    const cleared = f.service.configure({ clearKey: true });
+    assert.deepEqual(cleared.keys, []);
+    assert.equal(cleared.enabled, false);
+    assert.equal(cleared.configured, false);
+    assert.deepEqual(JSON.parse(await readFile(path.join(f.dir, 'translation-secret.json'), 'utf8')).apiKeys, []);
+    assert.equal(f.service.configure({ apiKey: 'flaky-key' }).keys[0].test, undefined);
+  } finally { await f.close(); }
+});
+
+test('local HTTP endpoints use the normal model and translation transport without following redirects', async () => {
+  for (const host of ['localhost', '127.0.0.1', '192.168.1.2', '10.1.2.3', '172.16.1.2', '[::1]', '[::ffff:127.0.0.1]', '[fd12::1]', 'ai.local', 'host.docker.internal'])
+    assert.equal(normalizeEndpoint(`http://${host}:1234/v1/`), `http://${new URL(`http://${host}`).hostname}:1234/v1`);
+  for (const host of ['8.8.8.8', '172.32.1.2', '169.254.169.254', 'localhost.example.com', '[2001:4860:4860::8888]'])
+    assert.throws(() => normalizeEndpoint(`http://${host}/v1`), /translation-endpoint-invalid/);
+  const received: string[] = [];
+  const server = createServer(async (request, response) => {
+    received.push(request.url!);
+    assert.equal(request.headers.authorization, `Bearer ${secret}`);
+    response.setHeader('Content-Type', 'application/json');
+    if (request.url === '/redirect/models') {
+      response.writeHead(302, { Location: '/v1/models' });
+      response.end();
+    } else if (request.url === '/v1/models') response.end(JSON.stringify({ data: [{ id: 'local-model' }] }));
+    else {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      assert.equal(body.model, 'local-model');
+      const lines = JSON.parse(body.messages[1].content).lines.map((line: any) => ({ id: line.id, text: '안녕' }));
+      response.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ lines }) } }] }));
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== 'string');
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const endpoint = { provider: 'openai' as const, baseUrl: baseUrl + '/v1' };
+    const client = new Gemini();
+    assert.deepEqual(await client.models(secret, AbortSignal.timeout(5000), endpoint), ['local-model']);
+    assert.deepEqual(await client.translate(secret, 'local-model', [{ id: 1, text: 'Hello' }], { title: '', sourceLanguage: 'en' }, AbortSignal.timeout(5000), endpoint), { '1': '안녕' });
+    await assert.rejects(client.models(secret, AbortSignal.timeout(5000), { ...endpoint, baseUrl: baseUrl + '/redirect' }), /translation-unavailable/);
+    assert.deepEqual(received, ['/v1/models', '/v1/chat/completions', '/redirect/models']);
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });

@@ -24,5 +24,6 @@ export function createOfflineSubtitleClient(options: SubtitleClientOptions = {})
     aliases: resolved.aliases, source: 'archive', title: resolved.title, season: resolved.season,
     episodeOffset: resolved.episodeOffset, isCurrentEpisode: false, confidence: Math.min(resolved.confidence, .85),
   });
+  (client as unknown as { collector: { discover: () => Promise<[]> } }).collector.discover = async () => [];
   return client;
 }

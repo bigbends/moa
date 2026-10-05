@@ -1,0 +1,10 @@
+services:
+  moa:
+    environment:
+      MOA_UPDATER_DIR: /run/moa-updater
+    group_add:
+      - "${MOA_UPDATER_GID:?Set the shared updater group ID}"
+    volumes:
+      - type: bind
+        source: ${MOA_UPDATER_PATH:?Set the absolute host updater directory}
+        target: /run/moa-updater

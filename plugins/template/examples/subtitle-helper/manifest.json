@@ -1,0 +1,10 @@
+{
+  "apiVersion": 1,
+  "id": "subtitle-helper",
+  "name": "자막 가져오기 도구",
+  "version": "1.0.0",
+  "description": "파일이나 붙여 넣은 자막을 현재 회차에 저장합니다.",
+  "placements": ["player", "settings"],
+  "permissions": ["player.context", "subtitles.import"],
+  "connect": []
+}

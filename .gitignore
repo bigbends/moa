@@ -1,4 +1,8 @@
 node_modules/
+.DS_Store
+.codegraph/
+.openchrome/
+/plugins/template.zip
 dist/
 data/
 .env*

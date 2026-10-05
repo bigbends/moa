@@ -1,6 +1,6 @@
 import { useNavigation, tabPath } from "../lib/navigation";
 import { hasLoginGate } from "../lib/api";
-import { Info, Bookmark, FolderOpen, History, House, LogOut, Search, Settings, UserRound, Users, UsersRound, X } from "lucide-react";
+import { Info, Bookmark, FolderOpen, History, House, LogOut, Puzzle, Search, Settings, Subtitles, UserRound, Users, UsersRound, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import type { Profile } from "@moa/shared";
@@ -9,6 +9,7 @@ import { logout } from "../pages/AccountsPage";
 import { currentProfileId, setCurrentProfileId } from "../lib/api";
 import { PROFILE_COLOR, cx } from "../lib/format";
 import { settledQuery, useSettledQuery } from "../lib/search-input";
+import { PluginScripts, PluginShortcuts } from './WebsitePlugins';
 import { AvatarArt, avatarSpec } from "./avatars";
 
 
@@ -111,6 +112,9 @@ function ProfileMenu({ profile }: { profile?: Profile }) {
           {item("/history", <History size={18} />, "시청 기록")}
           {admin && item("/sources", <FolderOpen size={18} />, "영상 소스")}
           {admin && item("/library", <FolderOpen size={18} />, "라이브러리 관리")}
+          {item("/plugins", <Puzzle size={18} />, "플러그인")}
+          <PluginShortcuts onSelect={() => setOpen(false)} />
+          {admin && item("/subtitles", <Subtitles size={18} />, "저장한 자막")}
           {admin && hasLoginGate && item("/accounts", <Users size={18} />, "계정과 초대")}
           {item("/settings", <Settings size={18} />, "설정")}
           {item("/about", <Info size={18} />, "정보/크레딧")}
@@ -147,6 +151,7 @@ export function AppShell() {
 
   return (
     <div className="shell">
+      <PluginScripts />
       <header className={cx("topnav", (scrolled || !overHero) && "is-solid", location.pathname.startsWith("/title/") && "topnav-detail")} data-remote-group data-remote-edge>
         <Link to="/" className="topnav-logo" aria-label="MOA 홈"><Logo /></Link>
         <nav className="topnav-links" aria-label="주요 메뉴">

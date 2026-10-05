@@ -10,6 +10,8 @@ export type TranslatedRange = TranslationJob["translatedRanges"][number];
 export type TranslationMode = Settings["translationMode"];
 export const translationModeOf = (settings?: Settings): TranslationMode => settings?.translationMode ?? "manual";
 export interface TranslationConfigPatch {
+  provider?: TranslationConfig["provider"];
+  baseUrl?: string;
   /** Legacy single key; the UI uses addKeys. */
   apiKey?: string;
   addKeys?: string[];
@@ -87,6 +89,7 @@ export const savedTranslations = (episodeId: string, signal?: AbortSignal) =>
   api<SubtitleTrack[]>(`/episodes/${encodeURIComponent(episodeId)}/subtitles/translations`, { signal });
 export const patchTranslationConfig = (patch: TranslationConfigPatch) =>
   api<TranslationConfig>("/admin/translation/config", { method: "PATCH", body: { ...patch } });
+export const testTranslationKey = (id: string) => api<TranslationConfig>(`/admin/translation/keys/${encodeURIComponent(id)}/test`, { method: "POST" });
 export const translationModels = () => api<{ models: string[] }>("/admin/translation/models");
 
 /** Readable message for server error codes; unknown codes fall back to a generic line. */
@@ -95,12 +98,20 @@ export function translationErrorMessage(code?: string): string {
     "translation-not-configured": "관리자가 번역 설정을 마치지 않았어요.",
     "translation-disabled": "관리자가 자막 번역을 꺼 두었어요.",
     "translation-queue-full": "번역 대기열이 가득 찼어요. 잠시 후 다시 시도해 주세요.",
-    "translation-key-invalid": "Gemini API 키가 올바르지 않아요. 관리자에게 알려 주세요.",
+    "translation-key-invalid": "API 키가 유효하지 않거나 만료됐어요. 키를 확인해 주세요.",
+    "translation-permission-denied": "이 키의 API 사용 권한이 없거나 사용 지역이 제한됐어요.",
+    "translation-credit-exhausted": "API 잔액이나 결제 한도가 부족해요. 공급자의 결제 설정을 확인해 주세요.",
+    "translation-key-not-found": "삭제된 키예요. 키 목록을 새로 확인해 주세요.",
+    "translation-test-running": "이 키를 검사하고 있어요. 결과를 기다려 주세요.",
+    "translation-config-changed": "검사 중 설정이 바뀌었어요. 현재 설정으로 다시 검사해 주세요.",
+    "translation-timeout": "제한 시간 안에 응답하지 않았어요. API 주소와 연결을 확인해 주세요.",
+    "translation-endpoint-invalid": "인증 정보나 쿼리 없이 HTTPS 또는 로컬 HTTP API 주소를 입력해 주세요.",
+    "translation-config-invalid": "번역 설정값을 확인해 주세요.",
     "translation-model-invalid": "설정된 번역 모델을 쓸 수 없어요. 관리자에게 알려 주세요.",
-    "translation-model-unavailable": "번역 모델을 지금 사용할 수 없어요. 잠시 후 다시 시도해 주세요.",
-    "translation-request-rejected": "Gemini가 이 자막의 번역 요청을 거절했어요.",
-    "translation-quota": "Gemini 사용 한도를 넘었어요. 관리자에게 알려 주세요.",
-    "translation-unavailable": "Gemini가 응답하지 않았어요. 잠시 후 다시 시도해 주세요.",
+    "translation-model-unavailable": "모델을 찾지 못했거나 이 키로 사용할 수 없어요. 모델 ID와 접근 권한을 확인해 주세요.",
+    "translation-request-rejected": "번역 서비스가 이 자막의 번역 요청을 거절했어요.",
+    "translation-quota": "번역 API 사용 한도를 넘었어요. 관리자에게 알려 주세요.",
+    "translation-unavailable": "번역 서비스가 응답하지 않았어요. 잠시 후 다시 시도해 주세요.",
     "translation-invalid-response": "번역 결과가 올바르지 않았어요. 다시 시도해 주세요.",
     "translation-incomplete": "일부 자막을 번역하지 못했어요. 다시 시도하면 이어서 번역해요.",
     "translation-subtitle-too-large": "자막 파일이 너무 커요. 1MB 이하만 번역할 수 있어요.",
