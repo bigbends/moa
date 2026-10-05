@@ -3,7 +3,7 @@ import { subtitleQuery } from './subtitle-query.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { createSubtitleClient, parseSeason, type SubtitleClient, type SubtitleCandidate } from '@moa/subtitles-ko';
-import type { OnlineSubtitleSearch, OnlineSubtitleQuery, SubtitleTrack } from '@moa/shared';
+import type { OnlineSubtitleSearch, OnlineSubtitleQuery, SubtitleTrack, OnlineSubtitleIssue } from '@moa/shared';
 import { Store } from './db.js';
 import { ApiFailure, hash } from './util.js';
 
@@ -26,11 +26,16 @@ export class OnlineSubtitles {
   searches = new Map<string, Search>();
   private assets = new Map<string, { episodeId: string; subtitleId: string; profileId: string; touched: number }>();
   private janitor: NodeJS.Timeout;
-  private diagnostics = new AsyncLocalStorage<{ partial: boolean }>();
+  private diagnostics = new AsyncLocalStorage<{ partial: boolean; issues: OnlineSubtitleIssue[] }>();
   private controller = new AbortController();
   constructor(private db: Store, private log: (value: Record<string, unknown>) => void, client?: OnlineClient) {
     this.client = client ?? createSubtitleClient({ cache: sqliteCache(db), onDiagnostic: d => {
       if (['timeout', 'error', 'aborted'].includes(d.code)) { const state = this.diagnostics.getStore(); if (state) state.partial = true; }
+      const current = this.diagnostics.getStore();
+      const kind: OnlineSubtitleIssue['kind'] = /HTTP (401|403)\b/.test(d.message ?? '') ? 'access-denied'
+        : d.code === 'timeout' || d.code === 'aborted' ? 'timeout' : d.code === 'not-found' ? 'not-found' : 'fetch-failed';
+      if (current && current.issues.length < 16 && !current.issues.some(item => item.kind === kind && item.creatorName === d.creatorName))
+        current.issues.push({kind, ...(d.creatorName ? {creatorName: d.creatorName.slice(0,100)} : {})});
       this.log({ event: 'online-subtitle-diagnostic', ...d });
     } });
     this.janitor = setInterval(() => {
@@ -61,7 +66,7 @@ export class OnlineSubtitles {
     return title;
   }
   async search(episodeId: string, profileId: string, signal?: AbortSignal, override: Partial<OnlineSubtitleQuery> = {}): Promise<OnlineSubtitleSearch> {
-    const episode = this.episode(episodeId), state = { partial: false };
+    const episode = this.episode(episodeId), state = { partial: false, issues: [] as OnlineSubtitleIssue[] };
     for (const [id, search] of this.searches) if (search.expiresAt <= Date.now()) this.searches.delete(id);
     if (this.searches.size >= 100) this.searches.delete(this.searches.keys().next().value!);
     const requestSignal = AbortSignal.any([this.controller.signal, AbortSignal.timeout(12_000), ...(signal ? [signal] : [])]);
@@ -80,7 +85,7 @@ export class OnlineSubtitles {
       const searchId = randomUUID(), expiresAt = Date.now() + 300_000;
       this.episode(episodeId);
       this.searches.set(searchId, { episodeId, profileId, candidates, expiresAt });
-      return { searchId, resolvedTitle, query, autoApply: query.warnings.length === 0, candidates: candidates.map(c => ({ id: c.id, creatorName: c.creatorName, sourceUrl: c.sourceUrl, filename: c.filename, format: c.format, matchedEpisode: c.matchedEpisode, confidence: c.confidence })), partial: state.partial, expiresAt };
+      return { searchId, resolvedTitle, query, autoApply: query.warnings.length === 0, candidates: candidates.map(c => ({ id: c.id, creatorName: c.creatorName, sourceUrl: c.sourceUrl, filename: c.filename, format: c.format, matchedEpisode: c.matchedEpisode, confidence: c.confidence })), partial: state.partial, issues: state.issues, expiresAt };
     });
   }
   track(row: Record<string, any>, url: string): SubtitleTrack {

@@ -39,6 +39,8 @@ export function SubtitleAdvancedSettings({ settings: s, admin, save }: { setting
     PRIORITY.find(([value]) => value === s.translationSourcePriority)?.[1],
     s.skipSubtitleSearchWithSiteTrack ? '사이트 자막 있으면 검색 안 함' : '항상 자동 검색',
     s.skipTranslationWithoutSubtitles ? '자막 없는 영상 번역 안 함' : '자막 없는 영상도 번역',
+    // Only a non-default online-subtitle choice, to keep the line short.
+    s.experimentalSubtitleSync ? null : '싱크 맞춤 끔',
     admin && config ? `요청 간격 ${seconds(config.requestIntervalMs)} · 재시도 ${config.retryCount}회` : null
   ].filter(Boolean).join(' · ');
 
@@ -79,6 +81,15 @@ export function SubtitleAdvancedSettings({ settings: s, admin, save }: { setting
             </div>
             <button role="switch" aria-checked={s.skipTranslationWithoutSubtitles} aria-label="자막이 없는 영상은 자동 번역 안 함" className={cx('switch', s.skipTranslationWithoutSubtitles && 'is-on')}
               onClick={() => save({ skipTranslationWithoutSubtitles: !s.skipTranslationWithoutSubtitles })}><i /></button>
+          </div>
+          <p className="settings-advanced-label">한국어 온라인 자막</p>
+          <div className="setting">
+            <div>
+              <b>싱크 자동 맞춤 <span className="status-pill">실험</span></b>
+              <small>영상의 외국어 자막과 대사 시각을 비교해, 일정하게 어긋난 게 확실할 때만 시간을 맞춰요. 대사가 맞지 않아 보이는 자막은 자동으로 고르지 않고, 비교할 자막이 없거나 확실하지 않으면 그대로 둬요.</small>
+            </div>
+            <button role="switch" aria-checked={s.experimentalSubtitleSync} aria-label="싱크 자동 맞춤" className={cx('switch', s.experimentalSubtitleSync && 'is-on')}
+              onClick={() => save({ experimentalSubtitleSync: !s.experimentalSubtitleSync })}><i /></button>
           </div>
           {admin && <RequestControls />}
         </div>

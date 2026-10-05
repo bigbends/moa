@@ -1,3 +1,4 @@
+import { checkSubtitleAlignment } from '../player/subtitle-sync';
 import { preparePlayback, retirePlayback } from '../player/session-lifecycle';
 import { subtitlesOffForTitle, rememberSubtitlesOff, subtitleOffsetForTitle, rememberSubtitleOffset } from "../player/subtitle-preference";
 import { enterFullscreen } from "../lib/playback-fullscreen";
@@ -139,7 +140,12 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
   const [ended, setEnded] = useState(false);
   const [levels, setLevels] = useState<Array<{ index: number; height: number }>>([]);
   const [level, setLevel] = useState(-1);
-  const [subOffset, setSubOffset] = useState(0);
+  const [manualSubOffset, setSubOffset] = useState(0);
+  const [autoAlignment, setAutoAlignment] = useState<{key:string;offset:number} | null>(null);
+  const alignmentKey = `${session?.sessionId}:${subtitle?.id}`;
+  const autoSubOffset = settings?.experimentalSubtitleSync && autoAlignment?.key === alignmentKey ? autoAlignment.offset : 0;
+  const manualSyncChoice = useRef(false);
+  const subOffset = manualSyncChoice.current || manualSubOffset !== 0 ? manualSubOffset : autoSubOffset;
   const subOffsetRef = useRef(0);
   const [subHeight, setSubHeight] = useState(() => { try { const saved=localStorage.getItem('moa.subtitleHeight'); return saved === null ? 8 : Math.max(0,Math.min(30,Number(saved) || 0)); } catch { return 8; } });
   const changeSubHeight = (value:number) => { setSubHeight(value); try { localStorage.setItem('moa.subtitleHeight',String(value)); } catch {} };
@@ -269,6 +275,28 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
       : own.find(track => track.lang === preferred) ?? own.find(track => track.default) ?? own[0] ?? null);
   }, [session, settings]);
 
+  useLayoutEffect(() => { manualSyncChoice.current = false; }, [session?.episodeId]);
+
+  useLayoutEffect(() => {
+    subOffsetRef.current = subOffset;
+    subs.current?.setOffset(subOffset);
+  }, [subOffset, session]);
+
+  useEffect(() => {
+    setAutoAlignment(null);
+    if (!session || !subtitle || !settings?.experimentalSubtitleSync || manualSyncChoice.current || manualSubOffset !== 0) return;
+    const stop = new AbortController(), choice = subtitleChoice.current;
+    void checkSubtitleAlignment(subtitle, session.subtitles, stop.signal).then(result => {
+      if (stop.signal.aborted || subtitleChoice.current !== choice || manualSyncChoice.current) return;
+      if (result.status === 'aligned') setAutoAlignment({key:alignmentKey,offset:result.offsetSeconds});
+      else if (result.status === 'mismatch' && choice === 0) {
+        // A weak timing match vetoes automatic selection only; the track remains available manually.
+        setSubtitle(session.subtitles.find(t => t.source !== 'online' && !isTranslationTrack(t)) ?? null);
+      }
+    });
+    return () => stop.abort();
+  }, [session, subtitle, settings?.experimentalSubtitleSync, manualSubOffset, alignmentKey]);
+
   const shownTrack = useRef<{ controller: SubtitleController | null; track: SubtitleTrack | null }>({ controller: null, track: null });
   useEffect(() => {
     const controller = subs.current;
@@ -324,6 +352,11 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
     try {
       const track = await api<SubtitleTrack>(`/episodes/${encodeURIComponent(session.episodeId)}/subtitles/online`, { method: "POST", body: { searchId: result.searchId, candidateId }, signal: controller.signal });
       if (controller.signal.aborted || subtitleChoice.current !== choice) return;
+      if (quiet && settings?.experimentalSubtitleSync) {
+        const alignment = await checkSubtitleAlignment(track, session.subtitles, controller.signal);
+        if (controller.signal.aborted || subtitleChoice.current !== choice) return;
+        if (alignment.status === 'mismatch') return;
+      }
       setExtraSubs(list => [...list.filter(item => item.id !== track.id), track]);
       setSubtitle(track);
       if (!quiet) rememberSubtitlesOff(session.mediaId, false);
@@ -334,7 +367,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
     } finally {
       if (applyAbort.current === controller) setOnline(state => ({ ...state, applying: undefined }));
     }
-  }, [session]);
+  }, [session, settings?.experimentalSubtitleSync]);
 
   useEffect(() => {
     // Translations belong to the episode, not the playback session, so they survive audio/stream switches.
@@ -512,6 +545,8 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
     return () => clearTimeout(timer);
   }, [notice]);
   const nudgeSubs = (delta: number) => {
+    manualSyncChoice.current = true;
+    setAutoAlignment(null);
     const next = Math.round((subOffset + delta) * 10) / 10;
     setSubOffset(next); subOffsetRef.current = next;
     subs.current?.setOffset(next);
@@ -520,10 +555,11 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
   // Timing usually matches across a release group's episodes, so the offset follows the title.
   useEffect(() => {
     if (!session) return;
+    manualSyncChoice.current = false;
     const saved = devicePrefs().rememberSubOffset ? subtitleOffsetForTitle(session.mediaId) : 0;
     subOffsetRef.current = saved; setSubOffset(saved);
     subs.current?.setOffset(saved);
-  }, [session?.mediaId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [session?.mediaId, session?.episodeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!resumeChip) return;
@@ -1144,7 +1180,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
                         </button>
                       )}
                       {online.result.autoApply === false && online.result.candidates.length > 0 && <p className="panel-note note-warn">회차 번호가 확실하지 않아 자동으로 적용하지 않았어요. 맞는 자막을 골라 주세요.</p>}
-                      {online.result.candidates.length === 0 && <p className="panel-note">‘{online.result.resolvedTitle}’ 자막을 찾지 못했어요.{online.result.query ? " 제목이나 시즌·화수를 바꿔서 다시 찾아보세요." : ""}</p>}
+                      {online.result.candidates.length === 0 && <p className="panel-note">‘{online.result.resolvedTitle}’ 자막을 가져오지 못했어요.{online.result.issues?.some(issue => issue.kind === 'access-denied') ? " 제작자 사이트에서 접속을 차단했어요. 자막이 없는 것은 아닐 수 있어요." : online.result.issues?.some(issue => issue.kind === 'timeout') ? " 검색 시간이 초과됐어요. 잠시 후 다시 시도해 주세요." : online.result.query ? " 제목이나 시즌·화수를 바꿔서 다시 찾아보세요." : ""}</p>}
                       {online.result.candidates.map(candidate => {
                         const applied = subtitle?.provenance?.creatorName === candidate.creatorName && extraSubs.some(track => track.id === subtitle?.id);
                         const q = online.result!.query;

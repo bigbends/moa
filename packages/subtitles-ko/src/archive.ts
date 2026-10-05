@@ -1,3 +1,8 @@
+import { execFile, type ExecFileOptionsWithBufferEncoding } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import yauzl, { type Entry, type ZipFile } from "yauzl";
 import iconv from "iconv-lite";
 import type { Readable } from "node:stream";
@@ -47,6 +52,7 @@ function rank(name: string, options: ExtractOptions): { rank: number; episode: n
 export async function extractSubtitleBuffer(input: Uint8Array, filename: string, options: ExtractOptions): Promise<ExtractedSubtitle | null> {
   const buf = Buffer.from(input);
   options.signal?.throwIfAborted();
+  if (isOtherArchive(buf)) return extractOtherArchive(buf, options);
   if (buf[0] !== 0x50 || buf[1] !== 0x4b) {
     if (options.acceptFilename?.(filename) === false) return null;
     const score = rank(filename, options);
@@ -116,4 +122,77 @@ export async function extractSubtitleBuffer(input: Uint8Array, filename: string,
     });
     return { ...convertSubtitle(decodeSubtitleBuffer(contents)), filename: selected.name, matchedEpisode: selected.score.episode, exactEpisode: selected.score.exact };
   } finally { activeStream?.destroy(); zip.close(); }
+}
+
+function isOtherArchive(buf: Buffer) {
+  return ['377abcaf271c', '526172211a07']
+    .some(magic => buf.subarray(0, magic.length / 2).toString('hex') === magic)
+    || buf.subarray(257, 262).toString() === 'ustar';
+}
+const execArchive = promisify(execFile);
+function runArchive(executable: string, args: string[], options: ExecFileOptionsWithBufferEncoding) {
+  // Keep malformed native decoder inputs within a per-process memory/CPU budget.
+  return process.platform === 'linux'
+    ? execArchive('prlimit', ['--as=268435456', '--cpu=8', '--', executable, ...args], options)
+    : execArchive(executable, args, options);
+}
+let activeArchives = 0;
+/** Decode one selected member to stdout. Archive paths are never written to disk. */
+async function extractOtherArchive(buf: Buffer, options: ExtractOptions): Promise<ExtractedSubtitle | null> {
+  if (activeArchives >= 2) throw new Error('Archive decoder busy');
+  activeArchives++;
+  let directory: string | undefined;
+  try {
+    directory = await mkdtemp(join(tmpdir(), 'moa-subtitle-'));
+    const path = join(directory, 'input.archive');
+    await writeFile(path, buf, {mode: 0o600});
+    const executable = process.env.MOA_7ZIP || '7z';
+    const settings = { timeout: 8000, signal: options.signal, windowsHide: true };
+    if (buf.subarray(0,6).toString('hex') === '526172211a07') {
+      const decoder = process.env.MOA_BSDTAR || 'bsdtar';
+      const listOptions = {...settings, encoding: 'buffer' as const, maxBuffer: 2 * 1024 * 1024};
+      const names = (await runArchive(decoder, ['-tf',path], listOptions)).stdout.toString('utf8').trimEnd().split('\n');
+      const details = (await runArchive(decoder, ['-tvf',path], listOptions)).stdout.toString('utf8').trimEnd().split('\n');
+      if (names.length !== details.length || names.length > (options.maxEntries ?? 300)) throw new Error('Archive exceeds entry limit');
+      const candidates = names.flatMap((name,index) => {
+        if (!safeZipPath(name) || /[\[\]*?\\]/.test(name) || !details[index]?.startsWith('-')) return [];
+        const score = rank(name,options); return score ? [{name,score}] : [];
+      }).sort((a,b) => b.score.rank-a.score.rank || a.name.localeCompare(b.name));
+      if (!candidates.length || candidates.length > 1 && !candidates[0]!.score.exact) return null;
+      const selected = candidates[0]!;
+      const result = await runArchive(decoder, ['-xOf',path,'--',selected.name],
+        {...settings, encoding: 'buffer', maxBuffer: options.maxZipBytes ?? 40 * 1024 * 1024});
+      return {...convertSubtitle(decodeSubtitleBuffer(result.stdout)), filename:selected.name,
+        matchedEpisode:selected.score.episode, exactEpisode:selected.score.exact};
+    }
+    const listing = await runArchive(executable, ['l','-slt','-sccUTF-8','-pMOA_NO_PASSWORD','--',path], {...settings, maxBuffer: 2 * 1024 * 1024, encoding: 'buffer'});
+    const sections = listing.stdout.toString('utf8').split(/^-{10,}\r?$/m);
+    if (sections.length !== 2) throw new Error('Invalid archive listing');
+    const records = sections[1]!.trim().split(/\r?\n\r?\n/).map(block => Object.fromEntries(block.split(/\r?\n/).map(line => {
+      const at = line.indexOf(' = '); return at < 0 ? ['', ''] : [line.slice(0,at), line.slice(at+3)];
+    })));
+    const limit = options.maxZipBytes ?? 40 * 1024 * 1024;
+    let total = 0;
+    if (records.length > (options.maxEntries ?? 300)) throw new Error('Archive exceeds entry limit');
+    const candidates: { name: string; size: number; score: NonNullable<ReturnType<typeof rank>> }[] = [];
+    for (const record of records) {
+      const name = record.Path || '', size = Number(record.Size);
+      if (!Number.isSafeInteger(size) || size < 0 || (total += size) > limit) throw new Error('Archive exceeds expansion limit');
+      if (record.Encrypted === '+') throw new Error('Encrypted subtitles are unsupported');
+      if (!safeZipPath(name) || record.Folder === '+' || record['Symbolic Link'] || record['Hard Link']) continue;
+      const score = rank(name, options);
+      if (score) candidates.push({name,size,score});
+    }
+    candidates.sort((a,b) => b.score.rank - a.score.rank || a.name.localeCompare(b.name));
+    if (!candidates.length || candidates.length > 1 && !candidates[0]!.score.exact) return null;
+    const selected = candidates[0]!;
+    const result = await runArchive(executable,
+      ['x','-so','-spd','-mmt=1','-pMOA_NO_PASSWORD','--',path,selected.name],
+      {...settings, encoding: 'buffer', maxBuffer: Math.min(limit, selected.size) + 1});
+    if (result.stdout.length !== selected.size) throw new Error('Archive member size mismatch');
+    return {...convertSubtitle(decodeSubtitleBuffer(result.stdout)), filename: selected.name,
+      matchedEpisode: selected.score.episode, exactEpisode: selected.score.exact};
+  } finally {
+    try { if (directory) await rm(directory, {recursive:true,force:true}); } finally { activeArchives--; }
+  }
 }
