@@ -56,6 +56,6 @@ Install `dist/subtitle-helper.moa-plugin.json`. Open the tool in the player's su
 
 ## API and license
 
-Read the [plugin API documentation](https://github.com/MixedSystem/moa-plugin-template/blob/main/docs/API.md) for events, methods, permissions, lifecycle, limits, and sandbox boundaries. The MOA repository also includes it at `docs/PLUGINS.md`.
+Read the [plugin API documentation](https://github.com/bigbends/moa-plugin-template/blob/main/docs/API.md) for events, methods, permissions, lifecycle, limits, and sandbox boundaries. The MOA repository also includes it at `docs/PLUGINS.md`.
 
 This template is licensed under GPL-3.0-or-later, as is MOA. Include a license and explain every permission when distributing your plugin.

@@ -155,7 +155,7 @@ The SDK does not expose arbitrary MOA API calls, authentication material, filesy
 
 ## Template
 
-The [standalone GitHub template](https://github.com/MixedSystem/moa-plugin-template) contains `manifest.json`, `plugin.js`, a standard-library build script, and an HTML subtitle-import example. The same source lives at `plugins/template` in MOA.
+The [standalone GitHub template](https://github.com/bigbends/moa-plugin-template) contains `manifest.json`, `plugin.js`, a standard-library build script, and an HTML subtitle-import example. The same source lives at `plugins/template` in MOA.
 
 ```sh
 node plugins/template/build.mjs
