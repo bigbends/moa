@@ -209,8 +209,8 @@ export interface WebsitePlugin {
   name: string;
   version: string;
   description: string;
-  placements: Array<'settings' | 'player'>;
-  permissions: Array<'player.context' | 'player.control' | 'subtitles.import' | 'storage' | 'notifications'>;
+  placements: Array<'app' | 'settings' | 'player'>;
+  permissions: Array<'app.context' | 'app.navigate' | 'ui' | 'player.context' | 'player.control' | 'subtitles.import' | 'storage' | 'notifications'>;
   kind: 'html' | 'script';
   actions?: Array<{ id: string; label: string }>;
   connect: string[];
@@ -238,6 +238,7 @@ export interface SavedSubtitle {
   source: 'upload' | 'translation' | 'online';
   name: string;
   title: string;
+  episodes: (Pick<Episode, 'id' | 'mediaId' | 'season' | 'number' | 'title'> & { mediaTitle: string })[];
   profile: string | null;
   format: 'ass' | 'vtt';
   bytes: number;

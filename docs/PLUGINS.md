@@ -1,10 +1,10 @@
 # Website plugins
 
-Website plugins add JavaScript behavior and optional tools to MOA. They can react to playback, control the player, retrieve and import subtitles, store profile-specific data, and show notifications. They are separate from video-source extensions and do not register media catalogs or playback sources.
+Website plugins add JavaScript behavior and optional tools to MOA. They can build their own tools, respond to page changes, navigate within MOA, react to playback, control the player, retrieve and import subtitles, store profile-specific data, and show notifications. They are separate from video-source extensions and do not register media catalogs or playback sources.
 
 ## Installation and management
 
-Open **Plugins** from the profile menu, My page, or the Settings link. Administrators select a JSON package, review its permissions and allowed network origins, then install it. Administrators can update, disable, or delete packages; other profiles can use enabled plugins. The plugin list has its own page at `/plugins`.
+Open **Plugins** from the profile menu, My page, or the Settings link. Administrators select a bundled `.moa-plugin.json` package or select `manifest.json` together with its JavaScript or HTML file. If only the manifest is selected, MOA shows its permissions and asks for the execution file; select `plugin.js` or `index.html` to complete the package. Review the permissions and allowed network origins, then install it. Administrators can update, disable, or delete packages; other profiles can use enabled plugins. The plugin list has its own page at `/plugins`.
 
 Packages and plugin data are stored on the server. Updating an ID replaces its code while preserving its enabled setting and saved data. JavaScript instances restart when the package revision or profile changes. Disabling or deleting blocks subsequent SDK calls immediately; background instances disappear when the list refreshes, within 30 seconds. Deleting a plugin also deletes its profile data, but keeps subtitles it imported. HTML tools must be closed and reopened after updating.
 
@@ -18,7 +18,7 @@ JavaScript packages run automatically. Only install code from authors you trust:
   "id": "pause-tool",
   "name": "Pause tool",
   "version": "1.0.0",
-  "description": "Pause playback from the subtitle menu.",
+  "description": "Pause playback from playback settings.",
   "placements": ["player"],
   "permissions": ["player.control"],
   "connect": [],
@@ -33,13 +33,14 @@ Use exactly one of `script` or `html`. All other fields except `actions` are req
 | --- | --- |
 | `script` | Plain JavaScript executed once when its scope mounts. Bundle any dependencies into this string. |
 | `html` | HTML, inline styles, and inline scripts shown in a dialog when the user opens the tool. |
-| `placements: ["player"]` | JavaScript runs while a video is open. Actions and HTML tools appear under Subtitle and audio. |
-| `placements: ["settings"]` | JavaScript runs across regular application pages outside the player. Actions and HTML tools appear on the Plugins page. The name is retained for package compatibility. |
-| `placements: ["player", "settings"]` | Both scopes. A new instance starts when moving between them. |
+| `placements: ["player"]` | JavaScript runs while a video is open. Actions and tools appear under Playback settings → Plugins. |
+| `placements: ["app"]` | JavaScript runs across regular application pages outside the player. Actions and tools appear on the Plugins page. |
+| `placements: ["settings"]` | Compatibility alias for `app`. Existing packages continue to work. |
+| `placements: ["player", "app"]` | Both scopes. A new instance starts when moving between them. |
 | `actions` | Optional JavaScript-only buttons, each with a unique `id` and readable `label`. IDs start with a lowercase letter and contain up to 40 lowercase letters, digits, or hyphens. |
 | `connect` | Exact HTTPS origins the plugin may request through `moa.fetch`. |
 
-A script instance survives opening and closing the subtitle menu. It is destroyed when leaving its scope, changing profile or episode, updating the package, or observing disable/deletion. Timers and event listeners inside the iframe disappear with it. Persist durable data through `moa.storage`.
+A script instance survives page changes within its scope and opening and closing its tool dialog or playback settings. It is destroyed when leaving its scope, changing profile or episode, updating the package, or observing disable/deletion. Timers and event listeners inside the iframe disappear with it. Persist durable data through `moa.storage`.
 
 ## Events and SDK
 
@@ -47,6 +48,10 @@ MOA supplies `window.moa` before plugin code runs. SDK methods return promises a
 
 | Method | Permission | Result |
 | --- | --- | --- |
+| `moa.app.context()` | `app.context` | Current `{ pathname, search, hash }` inside MOA |
+| `moa.app.navigate(path)` | `app.navigate` | Opens a root-relative MOA page such as `/search?q=example`, `/title/id`, or `/watch/episodeId`; external addresses are rejected |
+| `moa.ui.open()` | `ui` | Shows the plugin iframe as a dialog; build its contents using normal JavaScript DOM APIs |
+| `moa.ui.close()` | `ui` | Closes the dialog; a JavaScript instance and its DOM stay alive in its scope |
 | `moa.context()` | `player.context` | `{ episodeId, title, currentTime }`, or `null` outside the player |
 | `moa.player.play()` | `player.control` | Starts playback; browser autoplay restrictions may still reject it |
 | `moa.player.pause()` | `player.control` | Pauses playback |
@@ -63,10 +68,31 @@ Register event handlers synchronously at the top level of `plugin.js` so they re
 | Event | Payload | Delivery |
 | --- | --- | --- |
 | `ready` | Playback context when granted and available; otherwise `null` | Once after the host connects |
+| `routechange` | `{ pathname, search, hash }` | Initially and after a route changes, with `app.context` permission |
 | `timeupdate` | Playback context | About once per second in the player with `player.context` permission |
 | `action` | `{ id }` | When the user clicks a declared action |
 
 The context contains the episode ID, display title, and position in seconds. It does not expose source credentials, video URLs, account details, or API keys. Permissions are enforced by the host, even when a plugin calls a method directly.
+
+### Build a website tool
+
+Use `placements: ["app"]` with `ui`, `app.context`, `app.navigate`, and `storage` to make a page notebook, reading tracker, custom search form, or another tool independent of subtitles and playback. The plugin's **Open** button displays its own DOM. Application scripts with `ui` also appear in the profile menu, so their tools are reachable from other pages. It can also open its interface from an action through `moa.ui.open()`.
+
+```js
+document.body.innerHTML = '<label>Search <input id="query"></label><button id="search">Search MOA</button>';
+document.querySelector('#search').onclick = async () => {
+  const query = document.querySelector('#query').value;
+  await moa.ui.close();
+  await moa.app.navigate(`/search?q=${encodeURIComponent(query)}`);
+};
+
+moa.on('routechange', async page => {
+  const saved = await moa.storage.get();
+  await moa.storage.set({ ...saved, lastPage: page.pathname });
+});
+```
+
+The `examples/page-notes` template stores notes for each visited page and includes a MOA search form. It uses the same sandbox and permissions as every other plugin. A script can combine these operations with its own timers, calculations, downloaded data, and custom UI. The host DOM and unrestricted server APIs remain outside the plugin boundary.
 
 ### Save and restore a position
 
@@ -133,7 +159,7 @@ An HTML package needs the `subtitles.import` permission:
 
 ## Isolation and limits
 
-Both script and HTML packages execute in sandboxed browser iframes with same-origin access disabled. Scripts use a hidden iframe, so they do not need an interface. They cannot access MOA's DOM, cookies, local storage, or JavaScript state. Each instance uses a dedicated message channel. A restrictive Content Security Policy blocks direct fetches, external scripts, forms, and nested frames. Use the SDK for supported operations. This boundary does not prevent malicious code from exhausting browser resources or navigating its own frame.
+Both script and HTML packages execute in sandboxed browser iframes with same-origin access disabled. Scripts use a hidden iframe until a tool dialog opens, so an interface is optional. Closing a script dialog hides its iframe without rerunning the script; closing an HTML tool destroys that instance. They cannot access MOA's DOM, cookies, local storage, or JavaScript state. Each instance uses a dedicated message channel. A restrictive Content Security Policy blocks direct fetches, external scripts, forms, and nested frames. Use the SDK for supported operations. This boundary does not prevent malicious code from exhausting browser resources or navigating its own frame.
 
 | Resource | Limit |
 | --- | --- |
@@ -160,6 +186,7 @@ The [standalone GitHub template](https://github.com/bigbends/moa-plugin-template
 ```sh
 node plugins/template/build.mjs
 node plugins/template/build.mjs examples/subtitle-helper
+node plugins/template/build.mjs examples/page-notes
 ```
 
-Install the generated package from `plugins/template/dist`. Change the plugin ID before publishing a separate plugin, increase its version for updates, document requested permissions, and include a license.
+Install the generated package from `plugins/template/dist`, or select a template's `manifest.json` and `plugin.js` or `index.html` directly without building. Source installation accepts one manifest and one execution file; bundle dependencies into that JavaScript or HTML file. Change the plugin ID before publishing a separate plugin, increase its version for updates, document requested permissions, and include a license.

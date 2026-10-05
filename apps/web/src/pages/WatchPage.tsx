@@ -529,7 +529,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
     if (!track && autoJob) { void cancelTranslation(); setNotice("자막을 꺼서 자동 번역을 멈췄어요"); }
   };
 
-  const addSubtitleFiles = async (files: File[]): Promise<boolean> => {
+  const addSubtitleFiles = async (files: File[], showMenu = true): Promise<boolean> => {
     if (!files.length) return false;
     const choice = ++subtitleChoice.current;
     uploadAbort.current?.abort();
@@ -550,7 +550,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
       setExtraSubs(list => [...list.filter(item => !tracks.some(track => track.id === item.id)), ...tracks]);
       if (tracks.length === 1 && subtitleChoice.current === choice) chooseSubtitle(tracks[0]);
       else setNotice('가져온 자막 중 사용할 파일을 선택해 주세요.');
-      setPanel('subs');
+      if (showMenu) setPanel('subs');
       return true;
     } catch (error) {
       if (!controller.signal.aborted) setNotice(error instanceof Error ? error.message : '자막 파일을 읽지 못했어요.');
@@ -957,7 +957,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
   const VolumeIcon = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
   const error = sessionError ?? fatal;
   const pluginPlayer = {
-    episodeId, title: titleLine.join(' · '), getTime: () => video.current?.currentTime || 0, onImport: addSubtitleFiles,
+    episodeId, title: titleLine.join(' · '), getTime: () => video.current?.currentTime || 0, onImport: (files: File[]) => addSubtitleFiles(files, false),
     control: async (action: string, seconds?: number) => {
       const v = video.current;
       if (!v) throw new Error('재생을 준비하는 중이에요.');
@@ -1185,7 +1185,6 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
               <section className="panel-col">
                 <h3>자막</h3>
                 <button className="opt opt-action subtitle-upload" disabled={importing} onClick={() => subtitleInput.current?.click()}>{importing ? <Spinner size={18} /> : <FileUp size={18} />}<span>{importing ? '자막을 읽는 중…' : '자막 파일 선택'}<small>파일을 여기에 끌어 놓아도 돼요</small></span></button>
-                <PluginTools {...pluginPlayer} />
                 <button className={cx("opt", !subtitle && "is-active")} onClick={() => chooseSubtitle(null)}><Check size={18} className="opt-check" /><span>끄기</span></button>
                 {allSubs.map(track => (
                   <button key={track.id} className={cx("opt", subtitle?.id === track.id && "is-active")} onClick={() => chooseSubtitle(track)}>
@@ -1308,6 +1307,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
           )}
           {panel === "settings" && (
             <div className="panel-body panel-form">
+              <PluginTools {...pluginPlayer} />
               <div className="pf-block">
                 <span className="pf-label">재생 속도</span>
                 <div className="seg seg-fill" role="group" aria-label="재생 속도">

@@ -36,11 +36,22 @@ test('saved uploads survive restart and preserve profile ownership; admins manag
     assert.equal((await server.app.inject({ url: '/api/episodes/e/subtitles/uploads', headers })).json()[0].id, track.id);
     server.db.run("INSERT INTO translation_cache(key,format,chunks,content,touched,complete) VALUES('translated','vtt','[]',?,?,1)", content, Date.now());
     server.db.run("INSERT INTO translated_subtitles(episode_id,cache_key,created_at) VALUES('e','translated',?)", Date.now());
+    server.db.run("INSERT INTO media VALUES('m2',NULL,'다른 작품','anime','{}','2026')");
+    server.db.run("INSERT INTO episodes VALUES('e2','m2',2,3,'귀환',600,NULL),('removed','m2',2,4,'삭제한 회차',600,NULL)");
+    server.db.run("INSERT INTO translated_subtitles(episode_id,cache_key,created_at) VALUES('e2','translated',?)", Date.now());
+    server.db.run("INSERT INTO translation_cache(key,format,chunks,content,touched,complete) VALUES('orphan','vtt','[]',?,?,1)", content, Date.now());
+    server.db.run("INSERT INTO translated_subtitles(episode_id,cache_key,created_at) VALUES('removed','orphan',?)", Date.now());
+    server.db.run("DELETE FROM episodes WHERE id='removed'");
     server.db.run("INSERT INTO online_subtitles VALUES('online','e','제작자','https://example.com/sub','vtt',?,'hash','token',?)", content, Date.now());
     const listing = await server.app.inject('/api/admin/subtitles');
     assert.equal(listing.statusCode, 200, listing.body);
-    assert.equal(listing.json().length, 3);
+    assert.equal(listing.json().length, 4);
     assert.equal(listing.json().find((row: any) => row.source === 'upload').profile, '소유자');
+    const episode = { id: 'e', mediaId: 'm', season: 1, number: 1, title: '1화', mediaTitle: '저장 작품' };
+    assert.deepEqual(listing.json().find((row: any) => row.source === 'upload').episodes, [episode]);
+    assert.deepEqual(listing.json().find((row: any) => row.source === 'online').episodes, [episode]);
+    assert.deepEqual(listing.json().find((row: any) => row.id === 'translated').episodes, [{ id: 'e2', mediaId: 'm2', season: 2, number: 3, title: '귀환', mediaTitle: '다른 작품' }, episode]);
+    assert.deepEqual(listing.json().find((row: any) => row.id === 'orphan').episodes, []);
     for (const row of listing.json()) {
       const url = `/api/admin/subtitles/${row.source}/${row.id}`;
       assert.equal((await server.app.inject({ url: '/api/admin/subtitles', headers: member })).statusCode, 403);

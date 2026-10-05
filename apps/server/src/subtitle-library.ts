@@ -73,7 +73,19 @@ export class SubtitleLibrary {
     const online = this.db.all<SavedSubtitle>(`SELECT s.id,'online' AS source,s.creator_name || ' · 한국어' AS name,s.format,
       m.title AS title,NULL AS profile,length(CAST(s.content AS BLOB)) AS bytes,s.created_at AS createdAt,1 AS complete
       FROM online_subtitles s JOIN episodes e ON e.id=s.episode_id JOIN media m ON m.id=e.media_id`);
-    return [...uploads, ...translations, ...online].map(row => ({ ...row, complete: Boolean(row.complete) })).sort((a, b) => b.createdAt - a.createdAt);
+    const episodes = new Map<string, SavedSubtitle['episodes']>();
+    for (const { subtitleId, source, ...episode } of this.db.all<SavedSubtitle['episodes'][number] & { subtitleId: string; source: SavedSubtitle['source'] }>(`SELECT s.id AS subtitleId,s.source,
+      e.id,e.media_id AS mediaId,e.season,e.number,e.title,m.title AS mediaTitle FROM (
+        SELECT id,'upload' AS source,episode_id FROM uploaded_subtitles
+        UNION ALL SELECT cache_key,'translation',episode_id FROM translated_subtitles
+        UNION ALL SELECT id,'online',episode_id FROM online_subtitles
+      ) s JOIN episodes e ON e.id=s.episode_id JOIN media m ON m.id=e.media_id ORDER BY m.title,e.season,e.number,e.id`)) {
+      const key = `${source}:${subtitleId}`;
+      const linked = episodes.get(key);
+      if (linked) linked.push(episode);
+      else episodes.set(key, [episode]);
+    }
+    return [...uploads, ...translations, ...online].map(row => ({ ...row, episodes: episodes.get(`${row.source}:${row.id}`) ?? [], complete: Boolean(row.complete) })).sort((a, b) => b.createdAt - a.createdAt);
   }
 
   content(source: SavedSubtitle['source'], id: string) {

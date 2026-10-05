@@ -19,7 +19,7 @@
   const save = document.querySelector('#save');
   const status = document.querySelector('#status');
   moa.context().then(context => {
-    document.querySelector('#context').textContent = context ? context.title : '재생 화면의 자막 및 음성 메뉴에서 이 도구를 열어 주세요.';
+    document.querySelector('#context').textContent = context ? context.title : '재생 화면의 재생 설정에서 이 도구를 열어 주세요.';
     file.disabled = save.disabled = !context;
   }).catch(error => status.textContent = error.message);
   async function upload(value) {

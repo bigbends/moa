@@ -15,7 +15,7 @@ test('plugin packages validate permissions, sizes, origins and API versions', ()
   }
   assert.doesNotThrow(() => pluginPackage({ ...template, connect: ['https://example.org'] }));
   const { html: _, ...manifest } = template;
-  const script = { ...manifest, script: 'moa.on("ready", () => {});', permissions: ['storage', 'notifications', 'player.control'], actions: [{ id: 'bookmark', label: '책갈피' }] };
+  const script = { ...manifest, script: 'moa.on("ready", () => {});', placements: ['app', 'player'], permissions: ['app.context', 'app.navigate', 'ui', 'storage', 'notifications', 'player.control'], actions: [{ id: 'bookmark', label: '책갈피' }] };
   assert.deepEqual(pluginPackage(script), script);
   for (const patch of [{ html: '<p>Mixed</p>' }, { script: '' }, { script: '가'.repeat(70 * 1024) }, { actions: [{ id: 'bad/id', label: 'Bad' }] }, { actions: [{ id: 'valid', label: '' }] }, { actions: [{ id: 'one', label: 'One' }, { id: 'one', label: 'Two' }] }, { actions: Array.from({ length: 9 }, (_, i) => ({ id: `action-${i}`, label: 'Action' })) }]) assert.throws(() => pluginPackage({ ...script, ...patch }));
   assert.throws(() => pluginPackage({ ...template, actions: script.actions }));

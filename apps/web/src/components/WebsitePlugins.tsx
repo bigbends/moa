@@ -1,15 +1,16 @@
 import { Puzzle, Upload, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useLocation, useNavigate } from 'react-router-dom';
 import type { WebsitePlugin, WebsitePluginPackage } from '@moa/shared';
 import { api, currentProfileId } from '../lib/api';
 import { Button, IconButton } from './ui';
 
 const usePlugins = () => useQuery({ queryKey: ['website-plugins'], queryFn: () => api<WebsitePlugin[]>('/plugins'), retry: false, refetchInterval: 30000 });
 const path = (id: string) => `/plugins/${encodeURIComponent(id)}`;
-const permissionLabels = { 'player.context': '현재 작품·회차·재생 위치 읽기', 'player.control': '재생·일시정지·탐색', 'subtitles.import': '자막 가져오기·서버 저장', storage: '프로필별 데이터 저장', notifications: '알림 표시' };
+const permissionLabels = { 'app.context': '현재 페이지 읽기·변경 감지', 'app.navigate': 'MOA 내 페이지 이동', ui: '플러그인 도구 화면 표시', 'player.context': '현재 작품·회차·재생 위치 읽기', 'player.control': '재생·일시정지·탐색', 'subtitles.import': '자막 가져오기·서버 저장', storage: '프로필별 데이터 저장', notifications: '알림 표시' };
 type Player = { episodeId: string; title: string; getTime: () => number; onImport: (files: File[]) => Promise<boolean>; control: (action: string, seconds?: number) => Promise<void> };
-const act = (pluginId: string, actionId: string) => window.dispatchEvent(new CustomEvent('moa:plugin-action', { detail: { pluginId, actionId } }));
+const act = (pluginId: string, actionId?: string) => window.dispatchEvent(new CustomEvent('moa:plugin-action', { detail: { pluginId, actionId } }));
 const sdk = `
 (() => {
   let port, sequence = 0;
@@ -41,12 +42,14 @@ const sdk = `
   };
   window.moa = Object.freeze({
     on: (event, listener) => {
-      if (!['ready', 'timeupdate', 'action'].includes(event) || typeof listener !== 'function') throw new Error('Unknown event or invalid listener');
+      if (!['ready', 'routechange', 'timeupdate', 'action'].includes(event) || typeof listener !== 'function') throw new Error('Unknown event or invalid listener');
       if (!listeners.has(event)) listeners.set(event, new Set());
       listeners.get(event).add(listener);
       return () => listeners.get(event).delete(listener);
     },
     context: () => call('player.context'),
+    app: Object.freeze({ context: () => call('app.context'), navigate: path => call('app.navigate', path) }),
+    ui: Object.freeze({ open: () => call('ui', true), close: () => call('ui', false) }),
     player: Object.freeze({ play: () => call('player.control', { action: 'play' }), pause: () => call('player.control', { action: 'pause' }), seek: seconds => call('player.control', { action: 'seek', seconds }) }),
     storage: Object.freeze({ get: () => call('storage'), set: value => call('storage', value) }),
     notify: text => call('notifications', text),
@@ -62,24 +65,35 @@ const sdk = `
 })();`;
 
 function PluginWindow({ plugin, player, onClose }: { plugin: WebsitePlugin; player?: Player; onClose?: () => void }) {
+  const location = useLocation(), navigate = useNavigate();
+  const page = useRef(location); page.current = location;
   const content = useQuery({ queryKey: ['website-plugin', plugin.id, plugin.revision], queryFn: () => api<WebsitePluginPackage & { revision: string }>(path(plugin.id)), staleTime: 0, retry: false });
   const installedPlugins = usePlugins();
   const available = installedPlugins.data?.some(item => item.id === plugin.id && item.enabled && item.revision === plugin.revision) ?? false;
   const granted = useRef(available); granted.current = available;
   const dialog = useRef<HTMLDialogElement>(null), port = useRef<MessagePort | null>(null);
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [dismissed, setDismissed] = useState(false);
+  const [uiOpen, setUiOpen] = useState(plugin.kind === 'html');
   const active = useRef(true);
   const session = useRef(currentProfileId());
   const current = useRef(player); current.current = player;
   const canSend = () => active.current && granted.current && currentProfileId() === session.current;
   const context = () => { const p = current.current; return p ? { episodeId: p.episodeId, title: p.title, currentTime: p.getTime() } : null; };
+  const appContext = () => ({ pathname: page.current.pathname, search: page.current.search, hash: page.current.hash });
   useEffect(() => {
-    active.current = true; dialog.current?.showModal();
-    const action = (event: Event) => { const { pluginId, actionId } = (event as CustomEvent).detail; if (canSend() && pluginId === plugin.id && plugin.actions?.some(a => a.id === actionId)) port.current?.postMessage({ event: 'action', value: { id: actionId } }); };
+    active.current = true;
+    const action = (event: Event) => {
+      const { pluginId, actionId } = (event as CustomEvent).detail;
+      if (!canSend() || pluginId !== plugin.id) return;
+      if (actionId === undefined && plugin.permissions.includes('ui')) setUiOpen(true);
+      else if (plugin.actions?.some(a => a.id === actionId)) port.current?.postMessage({ event: 'action', value: { id: actionId } });
+    };
     window.addEventListener('moa:plugin-action', action);
     const timer = plugin.permissions.includes('player.context') && player ? window.setInterval(() => { if (canSend()) port.current?.postMessage({ event: 'timeupdate', value: context() }); }, 1000) : undefined;
     return () => { active.current = false; port.current?.close(); window.removeEventListener('moa:plugin-action', action); clearInterval(timer); };
   }, []);
+  useEffect(() => { if (uiOpen) dialog.current?.showModal(); else dialog.current?.close(); }, [uiOpen]);
+  useEffect(() => { if (canSend() && plugin.permissions.includes('app.context')) port.current?.postMessage({ event: 'routechange', value: appContext() }); }, [location]);
   useEffect(() => { if (notice) { const timer = setTimeout(() => setNotice(''), 6000); return () => clearTimeout(timer); } }, [notice]);
   useEffect(() => { if (!available) port.current?.close(); }, [available]);
   const connect = (frame: HTMLIFrameElement) => {
@@ -101,6 +115,15 @@ function PluginWindow({ plugin, player, onClose }: { plugin: WebsitePlugin; play
         if (data.method === 'fetch') {
           if (typeof data.value?.url !== 'string' || data.value.url.length > 2048) throw new Error('주소를 확인해 주세요.');
           result = await api(`${path(plugin.id)}/request`, { method: 'POST', body: { url: data.value.url, revision: plugin.revision } });
+        } else if (data.method === 'app.context' && installed.permissions.includes('app.context')) {
+          result = appContext();
+        } else if (data.method === 'app.navigate' && installed.permissions.includes('app.navigate')) {
+          if (typeof data.value !== 'string' || !data.value.startsWith('/') || data.value.startsWith('//') || data.value.length > 2048 || new URL(data.value, window.location.origin).origin !== window.location.origin) throw new Error('MOA 안의 페이지 주소를 입력해 주세요.');
+          void navigate(data.value);
+        } else if (data.method === 'ui' && installed.permissions.includes('ui')) {
+          if (typeof data.value !== 'boolean') throw new Error('화면 요청을 확인해 주세요.');
+          setUiOpen(data.value);
+          if (!data.value) onClose?.();
         } else if (data.method === 'player.context' && installed.permissions.includes('player.context')) {
           result = context();
         } else if (data.method === 'player.control' && installed.permissions.includes('player.control')) {
@@ -127,26 +150,37 @@ function PluginWindow({ plugin, player, onClose }: { plugin: WebsitePlugin; play
     };
     frame.contentWindow?.postMessage('moa-connect', '*', [channel.port2]);
     channel.port1.postMessage({ event: 'ready', value: plugin.permissions.includes('player.context') ? context() : null });
+    if (plugin.permissions.includes('app.context')) channel.port1.postMessage({ event: 'routechange', value: appContext() });
   };
-  const frame = content.data?.revision === plugin.revision && available && !error && <iframe title={plugin.name} hidden={plugin.kind === 'script'} sandbox="allow-scripts" referrerPolicy="no-referrer" onLoad={event => connect(event.currentTarget)} srcDoc={`<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; base-uri 'none'; form-action 'none'"><style>html{color-scheme:dark;font:15px/1.5 system-ui;background:#18181b;color:#fafafa}body{margin:16px}button,input,textarea{font:inherit;max-width:100%;box-sizing:border-box}button{cursor:pointer}</style><script>${sdk}</script>${content.data.script === undefined ? content.data.html : `<script>const script = document.createElement('script'); script.textContent = ${JSON.stringify(content.data.script).replace(/</g, '\\u003c')}; document.head.append(script);</script>`}`} />;
+  const frame = content.data?.revision === plugin.revision && available && !error && <iframe title={plugin.name} hidden={plugin.kind === 'script' && !uiOpen} sandbox="allow-scripts" referrerPolicy="no-referrer" onLoad={event => connect(event.currentTarget)} srcDoc={`<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; base-uri 'none'; form-action 'none'"><style>html{color-scheme:dark;font:15px/1.5 system-ui;background:#18181b;color:#fafafa}body{margin:16px}button,input,textarea{font:inherit;max-width:100%;box-sizing:border-box}button{cursor:pointer}</style><script>${sdk}</script><body>${content.data.script === undefined ? content.data.html : `<script>const script = document.createElement('script'); script.textContent = ${JSON.stringify(content.data.script).replace(/</g, '\\u003c')}; document.head.append(script);</script>`}`} />;
   const failure = error || (content.isError || !installedPlugins.isPending && !available || content.data && content.data.revision !== plugin.revision ? '플러그인을 불러오지 못했어요. 다시 열어 주세요.' : '');
   useEffect(() => { setDismissed(false); }, [failure]);
-  if (plugin.kind === 'script') return <>{frame}{!dismissed && (notice || failure) && <div className="plugin-notice" role="status"><b>{plugin.name}</b><span>{failure || notice}</span><IconButton label="알림 닫기" onClick={() => { setNotice(''); setDismissed(true); }}><X size={16} /></IconButton></div>}</>;
-  return <dialog ref={dialog} className="plugin-dialog" onCancel={onClose}>
-    <header><h2>{plugin.name}</h2><IconButton label="플러그인 닫기" onClick={onClose}><X size={20} /></IconButton></header>
+  const close = () => { setUiOpen(false); onClose?.(); };
+  return <><dialog ref={dialog} className="plugin-dialog" onCancel={event => { event.preventDefault(); close(); }}>
+    <header><h2>{plugin.name}</h2><IconButton label="플러그인 닫기" onClick={close}><X size={20} /></IconButton></header>
     {content.isPending && <p>플러그인을 여는 중…</p>}
-    {failure && <p role="alert" className="form-error">{failure}</p>}{notice && <p role="status">{notice}</p>}{frame}
-  </dialog>;
+    {failure && <p role="alert" className="form-error">{failure}</p>}{plugin.kind === 'html' && notice && <p role="status">{notice}</p>}{frame}
+  </dialog>{plugin.kind === 'script' && !dismissed && (notice || failure) && <div className="plugin-notice" role="status"><b>{plugin.name}</b><span>{failure || notice}</span><IconButton label="알림 닫기" onClick={() => { setNotice(''); setDismissed(true); }}><X size={16} /></IconButton></div>}</>;
 }
 
 export function PluginScripts({ player }: { player?: Player }) {
   const plugins = usePlugins();
-  return <>{plugins.data?.filter(plugin => plugin.enabled && plugin.kind === 'script' && plugin.placements.includes(player ? 'player' : 'settings')).map(plugin => <PluginWindow key={`${plugin.id}:${plugin.revision}:${currentProfileId()}:${player?.episodeId || ''}`} plugin={plugin} player={player} />)}</>;
+  return <>{plugins.data?.filter(plugin => plugin.enabled && plugin.kind === 'script' && (player ? plugin.placements.includes('player') : plugin.placements.some(place => place === 'app' || place === 'settings'))).map(plugin => <PluginWindow key={`${plugin.id}:${plugin.revision}:${currentProfileId()}:${player?.episodeId || ''}`} plugin={plugin} player={player} />)}</>;
+}
+
+export function PluginShortcuts({ onSelect }: { onSelect: () => void }) {
+  const plugins = usePlugins();
+  return <>{plugins.data?.filter(plugin => plugin.enabled && plugin.kind === 'script' && plugin.permissions.includes('ui') && plugin.placements.some(place => place === 'app' || place === 'settings')).map(plugin => <button key={plugin.id} className="menu-item" role="menuitem" onClick={() => { act(plugin.id); onSelect(); }}><Puzzle size={18} />{plugin.name}</button>)}</>;
 }
 
 export function PluginTools(player: Player) {
   const plugins = usePlugins(), [opened, setOpened] = useState<WebsitePlugin | null>(null);
-  return <>{plugins.data?.filter(plugin => plugin.enabled && plugin.placements.includes('player')).flatMap(plugin => plugin.kind === 'script' ? (plugin.actions || []).map(action => <button key={`${plugin.id}:${action.id}`} className="opt opt-action" onClick={() => act(plugin.id, action.id)}><Puzzle size={18} /><span>{action.label}</span><small>{plugin.name}</small></button>) : [<button key={plugin.id} className="opt opt-action" onClick={() => setOpened(plugin)}><Puzzle size={18} /><span>{plugin.name}</span><small>플러그인</small></button>])}{opened && <PluginWindow key={opened.id} plugin={opened} player={player} onClose={() => setOpened(null)} />}</>;
+  const shown = plugins.data?.filter(plugin => plugin.enabled && plugin.placements.includes('player')) ?? [];
+  if (!shown.length) return null;
+  return <div className="pf-block"><span className="pf-label">플러그인</span>{shown.map(plugin => <div key={plugin.id}>
+    {(plugin.kind === 'html' || plugin.permissions.includes('ui')) && <button className="opt opt-action" onClick={() => plugin.kind === 'script' ? act(plugin.id) : setOpened(plugin)}><Puzzle size={18} /><span>{plugin.name}</span><small>플러그인</small></button>}
+    {plugin.kind === 'script' && plugin.actions?.map(action => <button key={action.id} className="opt opt-action" onClick={() => act(plugin.id, action.id)}><Puzzle size={18} /><span>{action.label}</span><small>{plugin.name}</small></button>)}
+  </div>)}{opened && <PluginWindow key={opened.id} plugin={opened} player={player} onClose={() => setOpened(null)} />}</div>;
 }
 
 export function WebsitePlugins({ admin }: { admin: boolean }) {
@@ -159,22 +193,36 @@ export function WebsitePlugins({ admin }: { admin: boolean }) {
     catch { setError('플러그인을 처리하지 못했어요. 파일 형식과 연결을 확인해 주세요.'); }
     finally { setBusy(false); }
   };
-  const choose = async (file?: File) => {
-    if (!file) return;
-    setDraft(null); setError('');
+  const choose = async (files: File[]) => {
+    if (!files.length) return;
+    setBusy(true); setError('');
     try {
-      if (file.size > 256 * 1024) throw new Error();
-      const p = JSON.parse(await file.text()) as WebsitePluginPackage;
-      if (p.apiVersion !== 1 || typeof p.id !== 'string' || typeof p.name !== 'string' || typeof p.description !== 'string' || typeof p.version !== 'string' || (typeof p.html === 'string') === (typeof p.script === 'string') || !Array.isArray(p.placements) || !p.placements.every(v => ['settings', 'player'].includes(v)) || !Array.isArray(p.permissions) || !p.permissions.every(v => Object.hasOwn(permissionLabels, v)) || !Array.isArray(p.connect) || !p.connect.every(v => typeof v === 'string')) throw new Error();
+      const manifests = files.filter(file => /\.json$/i.test(file.name)), sources = files.filter(file => /\.(js|html)$/i.test(file.name));
+      if (manifests.length) setDraft(null);
+      if (manifests.length > 1 || sources.length > 1 || manifests.length + sources.length !== files.length) throw new Error('JSON 파일 하나와 JavaScript 또는 HTML 파일 하나를 선택해 주세요.');
+      if (files.some(file => file.size > 256 * 1024)) throw new Error('플러그인 파일은 256KB 이하여야 해요.');
+      let p = manifests.length ? JSON.parse((await manifests[0].text()).replace(/^\uFEFF/, '')) as WebsitePluginPackage : draft;
+      if (!p) throw new Error('먼저 플러그인의 manifest.json 파일을 선택해 주세요.');
+      if (p.apiVersion !== 1 || typeof p.id !== 'string' || typeof p.name !== 'string' || typeof p.description !== 'string' || typeof p.version !== 'string' || !Array.isArray(p.placements) || !p.placements.every(v => ['app', 'settings', 'player'].includes(v)) || !Array.isArray(p.permissions) || !p.permissions.every(v => Object.hasOwn(permissionLabels, v)) || !Array.isArray(p.connect) || !p.connect.every(v => typeof v === 'string') || p.html !== undefined && typeof p.html !== 'string' || p.script !== undefined && typeof p.script !== 'string' || p.html !== undefined && p.script !== undefined) throw new Error('올바른 MOA 플러그인 JSON 파일을 선택해 주세요.');
+      if (sources.length) {
+        if (p.html !== undefined || p.script !== undefined) throw new Error('실행 코드가 포함된 JSON 패키지는 파일 하나만 선택해 주세요.');
+        p = { ...p, [/\.js$/i.test(sources[0].name) ? 'script' : 'html']: await sources[0].text() };
+      }
+      const content = p.script ?? p.html;
+      if (content !== undefined && (!content.trim() || new Blob([content]).size > 200 * 1024)) throw new Error('실행 코드는 비어 있지 않은 200KB 이하의 JavaScript 또는 HTML 파일이어야 해요.');
+      if (new Blob([JSON.stringify(p)]).size > 256 * 1024) throw new Error('실행 코드를 포함한 플러그인 JSON 크기는 256KB 이하여야 해요.');
       setDraft(p);
-    } catch { setError('올바른 MOA 플러그인 JSON 파일을 선택해 주세요. 최대 크기는 256KB예요.'); }
+    } catch (error) { setError(error instanceof SyntaxError ? 'JSON 파일을 읽지 못했어요. 파일 내용을 확인해 주세요.' : error instanceof Error ? error.message : '플러그인 파일을 읽지 못했어요.'); }
+    finally { setBusy(false); }
   };
-  const shown = plugins.data?.filter(plugin => admin || plugin.placements.includes('settings')) ?? [];
+  const needsSource = draft !== null && draft.script === undefined && draft.html === undefined;
+  const shown = plugins.data?.filter(plugin => admin || plugin.placements.some(place => place === 'app' || place === 'settings')) ?? [];
   return <section className="settings-group" id="plugins"><h2>웹사이트 플러그인</h2><div className="settings-card">
-    {admin && <div className="setting"><div><b>플러그인 설치</b><small>MOA에 화면과 자동 실행 기능을 추가합니다. 파일과 요청 권한을 확인한 뒤 설치해 주세요.</small></div><Button icon={<Upload size={16} />} disabled={busy} onClick={() => input.current?.click()}>파일 선택</Button><input ref={input} type="file" accept=".json" hidden aria-label="플러그인 파일" onChange={event => { void choose(event.target.files?.[0]); event.target.value = ''; }} /></div>}
-    {draft && <div className="plugin-preview"><b>{draft.name} · {draft.version}</b><p>{draft.description}</p>{draft.script !== undefined && <p>이 JavaScript 플러그인은 지정된 페이지에서 자동 실행됩니다.</p>}<p>권한: {draft.permissions.map(p => permissionLabels[p]).join(', ') || '없음'}</p><p>외부 연결: {draft.connect.join(', ') || '없음'}</p><div className="plugin-actions"><Button disabled={busy} variant="primary" onClick={() => void run(async () => { await api('/admin/plugins', { method: 'POST', body: { ...draft } }); setDraft(null); })}>설치·업데이트</Button><Button disabled={busy} onClick={() => setDraft(null)}>취소</Button></div></div>}
+    {admin && <div className="setting"><div><b>플러그인 설치</b><small>JSON 패키지 또는 manifest.json과 JavaScript·HTML 파일을 선택하고 요청 권한을 확인해 주세요.</small></div><Button icon={<Upload size={16} />} disabled={busy} onClick={() => input.current?.click()}>파일 선택</Button><input ref={input} type="file" accept=".json,.js,.html" multiple hidden aria-label="플러그인 파일" onChange={event => { void choose(Array.from(event.target.files || [])); event.target.value = ''; }} /></div>}
+    {draft && <div className="plugin-preview"><b>{draft.name} · {draft.version}</b><p>{draft.description}</p>{needsSource && <p role="status">실행 코드가 없는 manifest예요. plugin.js 또는 index.html 파일을 추가로 선택해 주세요.</p>}{draft.script !== undefined && <p>이 JavaScript 플러그인은 지정된 페이지에서 자동 실행됩니다.</p>}<p>권한: {draft.permissions.map(p => permissionLabels[p]).join(', ') || '없음'}</p><p>외부 연결: {draft.connect.join(', ') || '없음'}</p><div className="plugin-actions">{needsSource && <Button disabled={busy} onClick={() => input.current?.click()}>실행 파일 선택</Button>}<Button disabled={busy || needsSource} variant="primary" onClick={() => void run(async () => { await api('/admin/plugins', { method: 'POST', body: { ...draft } }); setDraft(null); })}>설치·업데이트</Button><Button disabled={busy} onClick={() => { setDraft(null); setError(''); }}>취소</Button></div></div>}
     {shown.map(plugin => <div className="setting plugin-row" key={plugin.id}><div><b>{plugin.name} <small>{plugin.version}</small></b><small>{plugin.description}</small></div><div className="plugin-actions">
-      {plugin.enabled && plugin.placements.includes('settings') && (plugin.kind === 'script' ? plugin.actions?.map(action => <Button key={action.id} onClick={() => act(plugin.id, action.id)}>{action.label}</Button>) : <Button onClick={() => setOpened(plugin)}>열기</Button>)}
+      {plugin.enabled && plugin.permissions.includes('ui') && plugin.kind === 'script' && plugin.placements.some(place => place === 'app' || place === 'settings') && <Button onClick={() => act(plugin.id)}>열기</Button>}
+      {plugin.enabled && plugin.placements.some(place => place === 'app' || place === 'settings') && (plugin.kind === 'script' ? plugin.actions?.map(action => <Button key={action.id} onClick={() => act(plugin.id, action.id)}>{action.label}</Button>) : <Button onClick={() => setOpened(plugin)}>열기</Button>)}
       {admin && <><button role="switch" aria-label={`${plugin.name} 사용`} aria-checked={plugin.enabled} className={`switch ${plugin.enabled ? 'is-on' : ''}`} disabled={busy} onClick={() => void run(() => api(`/admin${path(plugin.id)}`, { method: 'PATCH', body: { enabled: !plugin.enabled } }))}><i /></button><Button disabled={busy} onClick={() => { if (confirm(`${plugin.name} 플러그인을 삭제할까요?`)) void run(() => api(`/admin${path(plugin.id)}`, { method: 'DELETE' })); }}>삭제</Button></>}
     </div></div>)}
     {!shown.length && <p className="plugin-empty">설치된 플러그인이 없습니다.</p>}
