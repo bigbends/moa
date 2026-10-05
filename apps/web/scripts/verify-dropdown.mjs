@@ -16,6 +16,7 @@ try {
     await context.addInitScript(() => { localStorage.setItem('moa.profile', 'test'); localStorage.setItem('moa.remoteMode', 'off'); });
     const page = await context.newPage();
     page.on('pageerror', error => errors.push(String(error)));
+    page.on('dialog', async dialog => { errors.push(`Unexpected browser dialog: ${dialog.type()}`); await dialog.dismiss(); });
     let settings = { autoplayNext: true, autoplayDelay: 5, preferredQuality: 'auto', defaultSubtitleLang: 'ko', subtitleSize: 'medium', translationMode: 'ask', translationSourcePriority: 'site-first', navigation: [{ id: 'home', name: '홈', sourceIds: [], includeLocal: true }] };
     const config = { enabled: true, configured: true, provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'long-custom-model-name-for-subtitle-translation', keys: [], batchSize: 50, requestIntervalMs: 1000, retryCount: 2 };
     await context.route(url => url.pathname.startsWith('/api/') || url.pathname.startsWith('/__moa/api/'), route => {
@@ -35,6 +36,28 @@ try {
     });
     const base = server.resolvedUrls.local[0];
     await page.goto(`${base}settings`);
+    const reset = page.locator('#tabs').getByRole('button', { name: '기본값', exact: true });
+    await reset.click();
+    const confirmation = page.getByRole('alertdialog', { name: '탭 초기화' });
+    await confirmation.waitFor();
+    assert.equal(await confirmation.getByRole('button', { name: '취소' }).evaluate(element => element === document.activeElement), true);
+    await page.keyboard.press('Shift+Tab');
+    assert.equal(await confirmation.getByRole('button', { name: '초기화', exact: true }).evaluate(element => element === document.activeElement), true);
+    await page.keyboard.press('Tab');
+    assert.equal(await confirmation.getByRole('button', { name: '취소' }).evaluate(element => element === document.activeElement), true);
+    await page.screenshot({ path: verificationPath(`confirmation-${width}.png`) });
+    const dialogBox = await confirmation.boundingBox();
+    assert.ok(dialogBox.x >= 0 && dialogBox.x + dialogBox.width <= width);
+    await page.keyboard.press('Escape');
+    await confirmation.waitFor({ state: 'detached' });
+    assert.equal(await reset.evaluate(element => element === document.activeElement), true);
+    await reset.click();
+    await confirmation.getByRole('button', { name: '취소' }).click();
+    assert.equal(settings.navigation.length, 1);
+    await reset.click();
+    await confirmation.getByRole('button', { name: '초기화', exact: true }).click();
+    await confirmation.waitFor({ state: 'detached' });
+    await page.waitForFunction(() => document.querySelector('.tab-list-foot')?.textContent?.includes('같은 프로필'));
     const quality = page.getByRole('combobox', { name: 'preferredQuality', exact: true });
     await quality.click();
     assert.equal(await quality.getAttribute('aria-expanded'), 'true');

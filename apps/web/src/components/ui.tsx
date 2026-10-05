@@ -29,6 +29,33 @@ export function IconButton({ label, children, className, ...rest }: ButtonHTMLAt
   return <button aria-label={label} title={label} className={cx("icon-btn", className)} {...rest}>{children}</button>;
 }
 
+export function ConfirmDialog({ title, children, confirmLabel = "확인", busy = false, onConfirm, onClose }: { title: string; children: ReactNode; confirmLabel?: string; busy?: boolean; onConfirm: () => void; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const id = useId();
+  useEffect(() => {
+    const element = dialog.current!;
+    const opener = document.activeElement as HTMLElement | null;
+    element.showModal();
+    return () => { element.close(); if (opener?.isConnected) opener.focus({ preventScroll: true }); };
+  }, []);
+  return <dialog ref={dialog} className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby={`${id}-title`} aria-describedby={`${id}-body`}
+    onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}
+    onKeyDown={event => {
+      if (remoteKey(event.nativeEvent) === "Back") { event.preventDefault(); event.stopPropagation(); if (!busy) onClose(); }
+      if (event.key === "Tab") {
+        const buttons = event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)');
+        const first = buttons[0], last = buttons[buttons.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    }}
+    onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); if (!busy && event.target === event.currentTarget && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) onClose(); }}>
+    <header className="sheet-head"><h2 id={`${id}-title`}>{title}</h2></header>
+    <div className="confirm-dialog-body" id={`${id}-body`}>{children}</div>
+    <footer className="sheet-foot"><Button type="button" autoFocus disabled={busy} onClick={onClose}>취소</Button><Button type="button" variant="primary" disabled={busy} onClick={onConfirm}>{busy ? "처리 중…" : confirmLabel}</Button></footer>
+  </dialog>;
+}
+
 export function Select({ value, options, onChange, className, disabled, ...rest }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "value" | "onChange" | "children"> & { value: string; options: { value: string; label: string }[]; onChange: (value: string) => void }) {
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);

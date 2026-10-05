@@ -15,7 +15,7 @@ import { SubtitleAdvancedSettings } from "../components/SubtitleAdvancedSettings
 import { translationModeOf, useTranslationConfig, type TranslationMode } from "../api/translation";
 import { keys, useFolders, useMe, useScanStatus, useSettings } from "../api/queries";
 import { AccountSection } from "./AccountsPage";
-import { Button, EmptyState, IconButton, Select, Skeleton, Spinner } from "../components/ui";
+import { Button, ConfirmDialog, EmptyState, IconButton, Select, Skeleton, Spinner } from "../components/ui";
 import { api, currentProfileId, hasLoginGate } from "../lib/api";
 import { TYPE_LABEL, cx } from "../lib/format";
 
@@ -77,6 +77,9 @@ export function LibraryPage() {
   const client = useQueryClient();
   const [picking, setPicking] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [deleting, setDeleting] = useState<LibraryFolder | null>(null);
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState(false);
   const status = useScanStatus(scanning);
   useEffect(() => {
     if (!scanning || !status.data || status.data.running) return;
@@ -92,10 +95,14 @@ export function LibraryPage() {
     void scan();
   };
   const remove = async (folder: LibraryFolder) => {
-    if (!confirm(`'${folder.label}' 폴더를 라이브러리에서 뺄까요? 파일은 삭제되지 않습니다.`)) return;
-    await api(`/library/folders/${folder.id}`, { method: "DELETE" });
-    void client.invalidateQueries({ queryKey: keys.folders });
-    void client.invalidateQueries({ queryKey: ["home"] });
+    setRemoving(true); setRemoveError(false);
+    try {
+      await api(`/library/folders/${folder.id}`, { method: "DELETE" });
+      setDeleting(null);
+      void client.invalidateQueries({ queryKey: keys.folders });
+      void client.invalidateQueries({ queryKey: ["home"] });
+    } catch { setRemoveError(true); }
+    finally { setRemoving(false); }
   };
   return (
     <div className="page-pad narrow">
@@ -118,11 +125,12 @@ export function LibraryPage() {
               <span>{TYPE_LABEL[folder.type]} · 작품 {folder.itemCount}개{folder.lastScanAt ? ` · ${new Date(folder.lastScanAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })} 스캔` : ""}</span>
               <small>{folder.path}</small>
             </div>
-            <IconButton label="폴더 빼기" onClick={() => void remove(folder)}><Trash2 size={18} /></IconButton>
+            <IconButton label="폴더 빼기" onClick={() => { setRemoveError(false); setDeleting(folder); }}><Trash2 size={18} /></IconButton>
           </li>
         ))}
       </ul>
       {picking && <FolderPicker onPick={(path, type, label) => void add(path, type, label)} onClose={() => setPicking(false)} />}
+      {deleting && <ConfirmDialog title="라이브러리 폴더 제거" confirmLabel="제거" busy={removing} onClose={() => setDeleting(null)} onConfirm={() => void remove(deleting)}>‘{deleting.label}’ 폴더를 라이브러리에서 뺄까요? 파일은 삭제되지 않습니다.{removeError && <p className="settings-error" role="alert">폴더를 빼지 못했어요. 다시 시도해 주세요.</p>}</ConfirmDialog>}
     </div>
   );
 }

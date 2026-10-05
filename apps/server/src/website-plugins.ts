@@ -1,6 +1,8 @@
 import { compatibilityHttp } from '@moa/extensions';
+import { safeZipPath } from '@moa/subtitles-ko';
 import type { WebsitePlugin, WebsitePluginPackage } from '@moa/shared';
 import type { FastifyInstance } from 'fastify';
+import yauzl, { type Entry, type ZipFile } from 'yauzl';
 import type { Store } from './db.js';
 import { ApiFailure, hash } from './util.js';
 
@@ -23,6 +25,78 @@ export function pluginPackage(value: unknown): WebsitePluginPackage {
   return p;
 }
 
+type PluginFile = { name: string; content: string };
+const packageFile = /(?:^|\/)(?:manifest\.json|plugin\.js|index\.html)$|\.moa-plugin\.json$/i;
+const packageLimit = 4 * 1024 * 1024;
+
+export async function unpackPlugin(value: unknown): Promise<WebsitePluginPackage> {
+  try {
+    const input = value as { archive?: string; files?: PluginFile[] };
+    let files: PluginFile[];
+    if (typeof input?.archive === 'string' && input.files === undefined) {
+      if (input.archive.length > Math.ceil(packageLimit / 3) * 4) throw new ApiFailure(413, 'plugin-package-too-large');
+      if (!/^[A-Za-z0-9+/]+={0,2}$/.test(input.archive) || input.archive.length % 4) throw new Error();
+      const zip = await new Promise<ZipFile>((resolve, reject) => yauzl.fromBuffer(Buffer.from(input.archive!, 'base64'), { lazyEntries: true, strictFileNames: true, validateEntrySizes: true }, (error, file) => error || !file ? reject(error) : resolve(file)));
+      try {
+        files = await new Promise<PluginFile[]>((resolve, reject) => {
+          const found: PluginFile[] = [], names = new Set<string>();
+          let count = 0, size = 0;
+          zip.once('error', reject);
+          zip.once('end', () => resolve(found));
+          zip.on('entry', (entry: Entry) => {
+            const name = entry.fileName;
+            if (++count > 256 || (size += entry.uncompressedSize) > packageLimit) { reject(new ApiFailure(413, 'plugin-package-too-large')); return; }
+            if (name.startsWith('__MACOSX/')) { zip.readEntry(); return; }
+            if (!safeZipPath(name) || names.has(name) || entry.isEncrypted() || (entry.externalFileAttributes >>> 16 & 0xf000) === 0xa000) { reject(new Error()); return; }
+            names.add(name);
+            if (!packageFile.test(name)) { zip.readEntry(); return; }
+            if (entry.uncompressedSize > 256 * 1024 || entry.uncompressedSize / Math.max(1, entry.compressedSize) > 250) { reject(new ApiFailure(413, 'plugin-package-too-large')); return; }
+            zip.openReadStream(entry, (error, stream) => {
+              if (error || !stream) { reject(error); return; }
+              const chunks: Buffer[] = [];
+              let bytes = 0;
+              stream.on('data', (chunk: Buffer) => {
+                bytes += chunk.length;
+                if (bytes > entry.uncompressedSize || bytes > 256 * 1024) stream.destroy(new Error());
+                else chunks.push(chunk);
+              });
+              stream.once('error', reject);
+              stream.once('end', () => {
+                try { found.push({ name, content: new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)) }); zip.readEntry(); }
+                catch (error) { reject(error); }
+              });
+            });
+          });
+          zip.readEntry();
+        });
+      } finally { zip.close(); }
+    } else if (Array.isArray(input?.files) && input.archive === undefined) files = input.files;
+    else throw new Error();
+    if (!files.length || files.length > 256 || new Set(files.map(file => file?.name)).size !== files.length) throw new Error();
+    let total = 0;
+    for (const file of files) {
+      if (!file || typeof file.name !== 'string' || file.name.length > 512 || !safeZipPath(file.name) || file.name.includes('\\') || typeof file.content !== 'string') throw new Error();
+      if ((total += Buffer.byteLength(file.content)) > packageLimit || Buffer.byteLength(file.content) > 256 * 1024) throw new ApiFailure(413, 'plugin-package-too-large');
+    }
+    const manifests = files.filter(file => /(?:^|\/)manifest\.json$/i.test(file.name));
+    const candidates = (manifests.length ? manifests : files.filter(file => /\.moa-plugin\.json$/i.test(file.name))).sort((a, b) => a.name.split('/').length - b.name.split('/').length);
+    const manifest = candidates[0];
+    if (!manifest || candidates[1]?.name.split('/').length === manifest.name.split('/').length) throw new ApiFailure(400, 'plugin-manifest-missing');
+    const p = JSON.parse(manifest.content.replace(/^\uFEFF/, ''));
+    if (p.script === undefined && p.html === undefined) {
+      const root = manifest.name.slice(0, manifest.name.lastIndexOf('/') + 1);
+      const sources = files.filter(file => file.name === `${root}plugin.js` || file.name === `${root}index.html`);
+      if (sources.length !== 1) throw new ApiFailure(400, 'plugin-entry-missing');
+      p[sources[0].name.endsWith('.js') ? 'script' : 'html'] = sources[0].content;
+    }
+    if (Buffer.byteLength(JSON.stringify(p)) > 256 * 1024) throw new ApiFailure(413, 'plugin-package-too-large');
+    return pluginPackage(p);
+  } catch (error) {
+    if (error instanceof ApiFailure) throw error;
+    throw new ApiFailure(400, 'invalid-plugin-package');
+  }
+}
+
 export function registerWebsitePlugins(app: FastifyInstance, db: Store) {
   db.db.exec('CREATE TABLE IF NOT EXISTS website_plugins(id TEXT PRIMARY KEY,package TEXT NOT NULL,enabled INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS website_plugin_data(plugin_id TEXT REFERENCES website_plugins(id) ON DELETE CASCADE,profile_id TEXT REFERENCES profiles(id) ON DELETE CASCADE,value TEXT NOT NULL,PRIMARY KEY(plugin_id,profile_id))');
   const metadata = (row: Record<string, any>): WebsitePlugin => { const { html, script, ...p } = JSON.parse(row.package) as WebsitePluginPackage; return { ...p, kind: script === undefined ? 'html' : 'script', revision: hash(row.package), enabled: Boolean(row.enabled) }; };
@@ -35,6 +109,7 @@ export function registerWebsitePlugins(app: FastifyInstance, db: Store) {
   app.addHook('onClose', async () => abort.abort());
   app.get('/api/plugins', async req => db.all(`SELECT * FROM website_plugins ${req.moaAccount.role === 'admin' ? '' : 'WHERE enabled=1'} ORDER BY id`).map(metadata));
   app.get('/api/plugins/:id', async req => { const row = get((req.params as { id: string }).id); return { ...JSON.parse(row.package), revision: hash(row.package) }; });
+  app.post('/api/admin/plugins/preview', { bodyLimit: 6 * 1024 * 1024 }, async req => unpackPlugin(req.body));
   app.post('/api/admin/plugins', { bodyLimit: 256 * 1024 }, async req => {
     const p = pluginPackage(req.body);
     if (!db.get('SELECT 1 FROM website_plugins WHERE id=?', p.id) && db.get('SELECT count(*) AS n FROM website_plugins')!.n >= 32) throw new ApiFailure(409, 'plugin-limit');

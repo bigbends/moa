@@ -1,3 +1,4 @@
+import { directoryTitle } from "./directory.js";
 import { createHash } from "node:crypto";
 import builtInAliases from "./aliases.json" with { type: "json" };
 import { PublicHttpClient } from "./http.js";
@@ -69,7 +70,11 @@ export class MetadataClient {
   }
 
   async lookup(names: string[], season: number, signal: AbortSignal): Promise<AnimeRecord | undefined> {
-    for (const name of [...new Set(names)].slice(0, 3)) {
+    // Anissia's text search can miss punctuation present in its own subject.
+    // Only broaden the query; compare returned identities against the original names.
+    const queries = [...new Set(names.map(name => name.normalize("NFKC")
+      .replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim()).filter(Boolean))].slice(0, 3);
+    for (const name of queries) {
       for (let page = 0; page < 3 && !signal.aborted; page++) {
         try {
           const data = await this.json(`${ANISSIA_API}/anime/list/${page}?q=${encodeURIComponent(name)}`, signal);
@@ -108,6 +113,8 @@ export class MetadataClient {
       source, confidence, ...(animeNo !== undefined ? { animeNo } : {}),
     });
     if (alias) return make(alias.korean, "alias", 1);
+    const registered = directoryTitle([normalized.baseTitle, ...aliases], normalized.season);
+    if (registered) return make(registered, 'directory', .9);
     if (/[가-힣]/.test(normalized.baseTitle)) return make(normalized.baseTitle, "input", 0.8);
     const [scheduled, names] = await Promise.all([
       this.schedule(signal), this.useAniList ? this.aniListNames(normalized.baseTitle, signal) : Promise.resolve([]),

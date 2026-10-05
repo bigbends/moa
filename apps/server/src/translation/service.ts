@@ -87,7 +87,7 @@ export class Translations {
     try {
       const saved = JSON.parse(readFileSync(this.filename, 'utf8'));
       const keys = (Array.isArray(saved.apiKeys) ? saved.apiKeys : saved.apiKey ? [saved.apiKey] : [])
-        .filter((key: unknown): key is string => typeof key === 'string' && validKey(key))
+        .filter(validKey)
         .slice(0, 8);
       if (validModel(saved.model))
         this.secret = {
@@ -223,12 +223,21 @@ export class Translations {
     if (!key) throw new ApiFailure(404, 'translation-key-not-found');
     if (this.testingKeys.has(id)) throw new ApiFailure(409, 'translation-test-running');
     this.testingKeys.add(id);
-    let result: { ok: boolean; error?: string };
+    let result: { ok: boolean; error?: string } = { ok: false, error: 'translation-unavailable' };
     try {
-      await this.gemini.translate(key, endpoint.model, [{ id: 0, text: 'Hello.' }], { title: '', sourceLanguage: 'en' }, AbortSignal.timeout(30000), endpoint);
-      result = { ok: true };
-    } catch (error) {
-      result = { ok: false, error: error instanceof ApiFailure ? error.error === 'translation-cancelled' ? 'translation-timeout' : error.error : 'translation-unavailable' };
+      for (let attempt = 0; attempt <= endpoint.retryCount; attempt++) {
+        if (this.secret !== endpoint) throw new ApiFailure(409, 'translation-config-changed');
+        try {
+          await this.gemini.translate(key, endpoint.model, [{ id: 0, text: 'Hello.' }], { title: '', sourceLanguage: 'en' }, AbortSignal.timeout(30000), endpoint);
+          result = { ok: true };
+          break;
+        } catch (error) {
+          const code = error instanceof ApiFailure ? error.error === 'translation-cancelled' ? 'translation-timeout' : error.error : 'translation-unavailable';
+          result = { ok: false, error: code };
+          if (attempt === endpoint.retryCount || !['translation-unavailable', 'translation-timeout', 'translation-quota', 'translation-invalid-response', 'translation-incomplete'].includes(code)) break;
+          await delay(250 * 2 ** attempt);
+        }
+      }
     } finally {
       this.testingKeys.delete(id);
     }

@@ -41,7 +41,7 @@ FROM node:22-bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
     && curl -fsSL https://repo.jellyfin.org/jellyfin_team.gpg.key | gpg --dearmor -o /usr/share/keyrings/jellyfin.gpg \
     && printf '%s\n' 'deb [signed-by=/usr/share/keyrings/jellyfin.gpg] https://repo.jellyfin.org/debian bookworm main' > /etc/apt/sources.list.d/jellyfin.list \
-    && apt-get update && apt-get install -y --no-install-recommends jellyfin-ffmpeg7 libchromaprint-tools libarchive-tools \
+    && apt-get update && apt-get install -y --no-install-recommends jellyfin-ffmpeg7 libchromaprint-tools 7zip libarchive-tools util-linux \
     && mkdir -p /data && chown node:node /data \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
@@ -57,7 +57,7 @@ COPY LICENSES ./LICENSES
 COPY docs/THIRD-PARTY-SOURCES.md ./docs/THIRD-PARTY-SOURCES.md
 ENV NODE_ENV=production MOA_DATA_DIR=/data MOA_MEDIA_ROOT=/media MOA_WEB_DIR=/app/web \
     MOA_FFMPEG=/usr/lib/jellyfin-ffmpeg/ffmpeg MOA_FFPROBE=/usr/lib/jellyfin-ffmpeg/ffprobe \
-    LIBVA_DRIVERS_PATH=/usr/lib/jellyfin-ffmpeg/lib/dri
+    MOA_7ZIP=/usr/bin/7zz LIBVA_DRIVERS_PATH=/usr/lib/jellyfin-ffmpeg/lib/dri
 EXPOSE 8795
 USER node
 # Exercise native sharp and resolve every server/workspace dependency on this CPU.

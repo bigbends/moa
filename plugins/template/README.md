@@ -4,15 +4,15 @@ Create JavaScript plugins that run inside MOA. The default example saves a playb
 
 ## Build and install
 
-In MOA, open **Plugins** from the profile menu, My page, or Settings link. As an administrator, select this directory's `manifest.json` and `plugin.js` together. You can also select the manifest first and add the script when prompted. Review the permissions and choose **Install/update**. Open a video and use **Playback settings → Plugins → Save bookmark / Resume bookmark**. One bookmark is stored per profile and survives browser and server restarts.
+In MOA, open **Plugins** from the profile menu, My page, or Settings link. As an administrator, choose **Select folder** and select this entire template directory, or choose **Select ZIP file** and select its ZIP package. Review the permissions and choose **Install/update**. Open a video and use **Playback settings → Plugins → Save bookmark / Resume bookmark**. One bookmark is stored per profile and survives browser and server restarts.
 
-To distribute one JSON package, use Node.js 22 or later. From this template directory:
+To distribute one ZIP package, use Node.js 22.15 or later. From this template directory:
 
 ```sh
 node build.mjs
 ```
 
-Install or share `dist/playback-bookmark.moa-plugin.json`. It contains the manifest and script, so no other files are needed.
+Install or share `dist/playback-bookmark.zip`. It contains the manifest and script. Users select only this ZIP file.
 
 When working inside the MOA repository, build with `node plugins/template/build.mjs` and use the output path it prints.
 
@@ -30,7 +30,7 @@ moa.on('action', async ({ id }) => {
 });
 ```
 
-The example needs `player.context`, `notifications`, and `player.control` permissions and an action with ID `pause`. After editing, select the manifest and source again or rebuild and install the new package using the same ID to update it. Give a separate plugin its own ID. Scripts run automatically in their declared scope and should request only the permissions they use.
+The example needs `player.context`, `notifications`, and `player.control` permissions and an action with ID `pause`. After editing, select the entire folder again or rebuild and install the new ZIP package using the same ID to update it. Give a separate plugin its own ID. Scripts run automatically in their declared scope and should request only the permissions they use.
 
 For automatic subtitle retrieval, declare `player.context` and `subtitles.import` and add your service's exact HTTPS origin to `connect`:
 
@@ -48,9 +48,9 @@ Replace the example endpoint with a service you operate or are permitted to use.
 
 ## Website tool example
 
-`examples/page-notes` adds a page notebook and a search form. It uses no playback or subtitle permissions. Select that folder's `manifest.json` and `plugin.js` in MOA, then open **Page notes** on the Plugins page or in the profile menu. Notes are stored on the server for the active profile; changing pages updates the note context. JavaScript can build its own interface with DOM APIs, use `moa.ui.open()` and `moa.ui.close()`, listen for `routechange`, and navigate through `moa.app.navigate(path)`.
+`examples/page-notes` adds a page notebook and a search form. It uses no playback or subtitle permissions. Select that entire folder in MOA, then open **Page notes** on the Plugins page or in the profile menu. Notes are stored on the server for the active profile; changing pages updates the note context. JavaScript can build its own interface with DOM APIs, use `moa.ui.open()` and `moa.ui.close()`, listen for `routechange`, and navigate through `moa.app.navigate(path)`.
 
-To distribute one JSON file:
+To distribute one ZIP file:
 
 ```sh
 node build.mjs examples/page-notes
@@ -64,7 +64,7 @@ node build.mjs examples/page-notes
 node build.mjs examples/subtitle-helper
 ```
 
-Install `dist/subtitle-helper.moa-plugin.json`, or select `manifest.json` and `index.html` from `examples/subtitle-helper` directly. Open the tool in **Playback settings → Plugins**. The example shows the optional HTML interface; JavaScript plugins can import subtitles without opening a dialog.
+Install `dist/subtitle-helper.zip`, or select the entire `examples/subtitle-helper` folder. Open the tool in **Playback settings → Plugins**. The example shows the optional HTML interface; JavaScript plugins can import subtitles without opening a dialog.
 
 ## API and license
 

@@ -34,6 +34,9 @@ test('online subtitles: profile/episode binding, expiry, deduplication, persiste
     assert.equal((await env.app.inject(url)).statusCode, 401);
     assert.equal((await env.app.inject({ url: '/api/episodes/missing/subtitles/online', headers })).statusCode, 404);
     assert.equal((await env.app.inject({ url: '/api/settings', headers })).json().autoFetchSubtitles, true);
+    assert.equal((await env.app.inject({url:'/api/settings',headers})).json().experimentalSubtitleSync,true);
+    assert.equal((await env.app.inject({method:'PATCH',url:'/api/settings',headers,payload:{experimentalSubtitleSync:false}})).json().experimentalSubtitleSync,false);
+    assert.equal((await env.app.inject({url:'/api/settings',headers:{'x-moa-profile':p2.id}})).json().experimentalSubtitleSync,true);
     assert.equal((await env.app.inject({ method: 'PATCH', url: '/api/settings', headers, payload: { autoFetchSubtitles: false } })).json().autoFetchSubtitles, false);
     assert.equal((await env.app.inject({method:'PATCH',url:'/api/settings',headers,payload:{subtitleSize:'xlarge'}})).json().subtitleSize,'xlarge');
     const search = (await env.app.inject({ url, headers })).json();
@@ -183,4 +186,28 @@ test('remote subtitles infer explicit seasons; title lookup cannot hold collecti
     assert.equal(lookups,2);
     assert.equal(env.db.get("SELECT COUNT(*) n FROM episode_skip_markers")!.n,0,'remote cache never masquerades as local file analysis');
   } finally {await env.app.close(); await rm(temp,{recursive:true,force:true});}
+});
+
+test('subtitle diagnostics distinguish access denial and stay isolated between simultaneous searches', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'moa-sub-diagnostics-'));
+  const env = await buildApp({ dataDir:temp, mediaRoot:temp, analyzeOnScan:false, logger:false, aniClient:noAni });
+  const {db, online} = env; await populate(db,temp);
+  const client = online.client as any;
+  client.resolveKoreanTitle = async (title:string) => title;
+  client.searchSubtitles = async (query:any) => {
+    await new Promise(resolve=>setTimeout(resolve,query.title==='차단작품'?10:2));
+    client.options.onDiagnostic({stage:'page',code:query.title==='차단작품'?'error':'not-found',creatorName:'제작자',message:query.title==='차단작품'?'HTTP 403 from example.org/private?token=secret':'No matching attachment'});
+    return [];
+  };
+  try {
+    const [blocked,missing] = await Promise.all([
+      online.search('media-1','p',undefined,{title:'차단작품'}),
+      online.search('media-1','p2',undefined,{title:'없는작품'})
+    ]);
+    assert.deepEqual(blocked.issues,[{kind:'access-denied',creatorName:'제작자'}]);
+    assert.equal(blocked.partial,true);
+    assert.deepEqual(missing.issues,[{kind:'not-found',creatorName:'제작자'}]);
+    assert.equal(missing.partial,false);
+    assert.ok(!JSON.stringify(blocked).includes('secret'));
+  } finally {await env.app.close();await rm(temp,{recursive:true,force:true});}
 });

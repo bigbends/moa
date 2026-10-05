@@ -4,7 +4,7 @@ Website plugins add JavaScript behavior and optional tools to MOA. They can buil
 
 ## Installation and management
 
-Open **Plugins** from the profile menu, My page, or the Settings link. Administrators select a bundled `.moa-plugin.json` package or select `manifest.json` together with its JavaScript or HTML file. If only the manifest is selected, MOA shows its permissions and asks for the execution file; select `plugin.js` or `index.html` to complete the package. Review the permissions and allowed network origins, then install it. Administrators can update, disable, or delete packages; other profiles can use enabled plugins. The plugin list has its own page at `/plugins`.
+Open **Plugins** from the profile menu, My page, or the Settings link. Administrators select one ZIP package or an entire plugin folder. The package contains `manifest.json` and either `plugin.js` or `index.html` in the same directory. A wrapper directory, such as GitHub's downloaded ZIP, is supported; the shallowest manifest is selected, so nested examples do not override the main plugin. Bundled `.moa-plugin.json` files remain supported. Review the permissions and allowed network origins, then install it. Administrators can update, disable, or delete packages; other profiles can use enabled plugins. The plugin list has its own page at `/plugins`.
 
 Packages and plugin data are stored on the server. Updating an ID replaces its code while preserving its enabled setting and saved data. JavaScript instances restart when the package revision or profile changes. Disabling or deleting blocks subsequent SDK calls immediately; background instances disappear when the list refreshes, within 30 seconds. Deleting a plugin also deletes its profile data, but keeps subtitles it imported. HTML tools must be closed and reopened after updating.
 
@@ -164,7 +164,8 @@ Both script and HTML packages execute in sandboxed browser iframes with same-ori
 | Resource | Limit |
 | --- | --- |
 | Installed plugins | 32 |
-| Package JSON | 256 KiB |
+| ZIP or folder | 4 MiB, 256 entries; ZIP expansion is also limited to 4 MiB |
+| Assembled package JSON | 256 KiB |
 | Script or HTML content | 200 KiB |
 | Actions | 8, labels up to 60 characters |
 | Allowed HTTPS origins | 10 |
@@ -189,4 +190,4 @@ node plugins/template/build.mjs examples/subtitle-helper
 node plugins/template/build.mjs examples/page-notes
 ```
 
-Install the generated package from `plugins/template/dist`, or select a template's `manifest.json` and `plugin.js` or `index.html` directly without building. Source installation accepts one manifest and one execution file; bundle dependencies into that JavaScript or HTML file. Change the plugin ID before publishing a separate plugin, increase its version for updates, document requested permissions, and include a license.
+Install the generated ZIP from `plugins/template/dist`, or select the entire template folder without building. The build script uses Node.js 22.15 or later and needs no dependencies. Include one `manifest.json` and one `plugin.js` or `index.html` at the package root; bundle dependencies into that JavaScript or HTML file. Unrelated documentation files are ignored. Encrypted ZIPs, symbolic links, duplicate paths, and unsafe paths are rejected. Change the plugin ID before publishing a separate plugin, increase its version for updates, document requested permissions, and include a license.

@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { pluginPackage } from '../src/website-plugins.js';
+import { pluginPackage, unpackPlugin } from '../src/website-plugins.js';
 import { buildApp } from '../src/app.js';
 
 const template = { ...JSON.parse(await readFile(new URL('../../../plugins/template/examples/subtitle-helper/manifest.json', import.meta.url), 'utf8')), html: '<p>Plugin test</p>' };
@@ -19,6 +21,34 @@ test('plugin packages validate permissions, sizes, origins and API versions', ()
   assert.deepEqual(pluginPackage(script), script);
   for (const patch of [{ html: '<p>Mixed</p>' }, { script: '' }, { script: '가'.repeat(70 * 1024) }, { actions: [{ id: 'bad/id', label: 'Bad' }] }, { actions: [{ id: 'valid', label: '' }] }, { actions: [{ id: 'one', label: 'One' }, { id: 'one', label: 'Two' }] }, { actions: Array.from({ length: 9 }, (_, i) => ({ id: `action-${i}`, label: 'Action' })) }]) assert.throws(() => pluginPackage({ ...script, ...patch }));
   assert.throws(() => pluginPackage({ ...template, actions: script.actions }));
+});
+
+test('whole plugin folders and ZIPs select their root manifest and reject unsafe or incomplete packages', async () => {
+  const { html, ...manifest } = template;
+  const files = [{ name: 'root/manifest.json', content: '\uFEFF' + JSON.stringify(manifest) }, { name: 'root/index.html', content: html }, { name: 'root/examples/manifest.json', content: JSON.stringify({ ...manifest, id: 'example' }) }, { name: 'root/examples/index.html', content: '<p>Example</p>' }];
+  assert.deepEqual(await unpackPlugin({ files }), template);
+  assert.deepEqual(await unpackPlugin({ files: [{ name: 'old.moa-plugin.json', content: JSON.stringify(template) }] }), template);
+  const script = files.slice(0, 2).map(file => file.name.endsWith('index.html') ? { name: 'root/plugin.js', content: 'moa.on("ready", () => {});' } : file);
+  assert.equal((await unpackPlugin({ files: script })).script, script[1].content);
+  for (const invalid of [null, {}, { files: [] }, { files: [files[0]] }, { files: [files[1]] }, { files: [...files, files[0]] }, { files: [...files, { name: 'root/plugin.js', content: 'void 0;' }] }, { files: [{ name: '../manifest.json', content: '{}' }] }, { files: [{ name: 'manifest.json', content: '{' }] }, { files: [{ name: 'plugin.moa-plugin.json', content: 'null' }] }, { files: [{ ...files[0], content: 'x'.repeat(256 * 1024 + 1) }] }, { archive: '!!!!' }, { archive: Buffer.from('not zip').toString('base64') }]) await assert.rejects(unpackPlugin(invalid));
+  const directory = await mkdtemp(path.join(tmpdir(), 'moa-plugin-package-'));
+  try {
+    for (const file of files) { await mkdir(path.dirname(path.join(directory, file.name)), { recursive: true }); await writeFile(path.join(directory, file.name), file.content); }
+    await writeFile(path.join(directory, 'root/README.md'), 'Package documentation');
+    const archive = (...names: string[]) => { const output = path.join(directory, 'test.zip'); execFileSync('bsdtar', ['-cf', output, '--format', 'zip', '-C', directory, ...names]); return readFileSync(output); };
+    const zip = archive('root');
+    assert.deepEqual(await unpackPlugin({ archive: zip.toString('base64') }), template);
+    await assert.rejects(unpackPlugin({ archive: archive('root/manifest.json').toString('base64') }), { error: 'plugin-entry-missing' });
+    await assert.rejects(unpackPlugin({ archive: archive('root/manifest.json', 'root/manifest.json', 'root/index.html').toString('base64') }));
+    await assert.rejects(unpackPlugin({ archive: Buffer.from(zip.toString('latin1').replaceAll('root/', '../x/'), 'latin1').toString('base64') }));
+    await symlink('index.html', path.join(directory, 'root/link.html'));
+    await assert.rejects(unpackPlugin({ archive: archive('root').toString('base64') }));
+    const templateRoot = new URL('../../../plugins/template/', import.meta.url).pathname;
+    execFileSync(process.execPath, [path.join(templateRoot, 'build.mjs')]);
+    const built = await unpackPlugin({ archive: (await readFile(path.join(templateRoot, 'dist/playback-bookmark.zip'))).toString('base64') });
+    assert.equal(built.id, 'playback-bookmark');
+    assert.equal(built.script, await readFile(path.join(templateRoot, 'plugin.js'), 'utf8'));
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
 test('script plugin storage enforces permission, revision, profile boundaries, size and deletion', async () => {
@@ -77,6 +107,10 @@ test('plugin installation persists, admin controls are protected and network acc
     const p = (await env.app.inject({ method: 'POST', url: '/api/profiles', headers: member, payload: { name: 'Member' } })).json();
     const profile = { ...member, 'x-moa-profile': p.id };
     assert.equal((await env.app.inject({ method: 'POST', url: '/api/admin/plugins', headers: member, payload: template })).statusCode, 403);
+    const preview = { files: [{ name: 'package.moa-plugin.json', content: JSON.stringify(template) }] };
+    assert.equal((await env.app.inject({ method: 'POST', url: '/api/admin/plugins/preview', headers: member, payload: preview })).statusCode, 403);
+    assert.deepEqual((await env.app.inject({ method: 'POST', url: '/api/admin/plugins/preview', headers: admin, payload: preview })).json(), template);
+    assert.equal(env.db.get('SELECT count(*) AS n FROM website_plugins')!.n, 0);
     assert.equal((await env.app.inject({ method: 'POST', url: '/api/admin/plugins', payload: template })).statusCode, 401);
     assert.equal((await env.app.inject({ method: 'POST', url: '/api/admin/plugins', headers: admin, payload: template })).statusCode, 200);
     assert.equal((await env.app.inject({ url: '/api/plugins', headers: member })).statusCode, 401);

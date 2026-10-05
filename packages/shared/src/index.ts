@@ -271,7 +271,13 @@ export interface OnlineSubtitleQuery {
   warnings?: string[];
 }
 
+export interface OnlineSubtitleIssue {
+  kind: 'access-denied' | 'timeout' | 'fetch-failed' | 'not-found';
+  creatorName?: string;
+}
 export interface OnlineSubtitleSearch {
+  /** Summarized failures; never includes network URLs or raw exception text. */
+  issues?: OnlineSubtitleIssue[];
   query?: OnlineSubtitleQuery;
   /** False when numbering requires user review. Manual application is still allowed. */
   autoApply?: boolean;
@@ -367,6 +373,8 @@ export interface Settings {
   hardwareTranscoding: boolean;
   /** Search Korean subtitles online when an anime episode has none. */
   autoFetchSubtitles: boolean;
+  /** Compare dialogue timing before applying a confident constant offset. */
+  experimentalSubtitleSync: boolean;
   translationMode: "manual" | "ask" | "auto";
   /** Preferred original when automatic translation is needed. */
   translationSourcePriority: "site" | "jimaku";
