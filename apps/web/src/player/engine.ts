@@ -92,6 +92,8 @@ export class SubtitleController {
   private shifted = 0;
   private appearance: SubtitleAppearance = { size: "medium", background: "original" };
   private originalStyles: AssStyle[] = [];
+  private originalEvents: Awaited<ReturnType<Jassub["renderer"]["getEvents"]>> | null = null;
+  private styled = false;
   private styling: Promise<void> = Promise.resolve();
 
   setAppearance(value: SubtitleAppearance) {
@@ -104,11 +106,11 @@ export class SubtitleController {
     this.styling = this.styling.catch(() => {}).then(async () => {
       if (!renderer || token !== this.token || !this.originalStyles.length) return;
       const { size, background } = this.appearance;
+      const originalAppearance = size === "medium" && background === "original";
+      if (originalAppearance && !this.styled) return;
       for (const [index, original] of this.originalStyles.entries()) {
         if (token !== this.token) return;
         const style = { ...original, FontSize: original.FontSize * ({ small: .8, medium: 1, large: 1.3, xlarge: 1.65 }[size]) };
-        // libass stores colors as RRGGBBAA (inverted alpha). Restore from the
-        // original each time so repeated changes never compound font sizes.
         if (background === "soft" || background === "solid") {
           style.BorderStyle = 3; style.Outline = 2; style.Shadow = 0;
           style.OutlineColour = background === "soft" ? 0x80 : 0x00;
@@ -118,6 +120,17 @@ export class SubtitleController {
         }
         await renderer.renderer.setStyle(style, index);
       }
+      if (background !== "original" && !this.originalEvents) this.originalEvents = await renderer.renderer.getEvents();
+      for (const [index, event] of this.originalEvents?.entries() ?? []) {
+        if (token !== this.token) return;
+        const Text = event.Text?.replace(/\{[^}]*\}/g, block => block
+          .replace(/\\(?:[xy]?(?:bord|shad)|[34][ca])[^\\})]*/gi, "")
+          .replace(/\\alpha(&H[0-9a-f]+&?)/gi, "\\1a$1\\2a$1"));
+        if (Text !== event.Text) await renderer.renderer.setEvent({ ...event, Text: background === "original" ? event.Text : Text } as Parameters<Jassub["renderer"]["setEvent"]>[0], index);
+      }
+      if (token !== this.token) return;
+      this.styled = !originalAppearance;
+      if (background === "original") this.originalEvents = null;
       if (token === this.token && renderer._lastDemandTime) await renderer._demandRender(true);
     });
     return this.styling;
@@ -198,6 +211,8 @@ export class SubtitleController {
         await renderer.renderer.setTrackByUrl(track.url);
         if (token !== this.token) return;
         this.originalStyles = await renderer.renderer.getStyles();
+        this.originalEvents = null;
+        this.styled = false;
         if (token === this.token) await this.applyAppearance();
       });
       this.assSwaps = swap;
@@ -228,11 +243,11 @@ export class SubtitleController {
   }
 
   private lifted = false;
-  private height = 8;
+  private height = 0;
   private cueRows = new WeakMap<VTTCue, { key: string; rows: number }>();
   private cuePositions = new WeakMap<VTTCue,{line:number|AutoKeyword;snapToLines:boolean;lineAlign:LineAlignSetting}>();
   setHeight(percent: number) {
-    this.height = Math.max(0, Math.min(30, Number.isFinite(percent) ? percent : 8));
+    this.height = Math.max(0, Math.min(30, Number.isFinite(percent) ? percent : 0));
     this.setLift(this.lifted);
   }
 
@@ -275,7 +290,7 @@ export class SubtitleController {
         this.cueRows.set(cue, {key, rows});
         // Preserve deliberately placed/vertical cues at position zero, but keep
         // ordinary bottom captions inside the viewport even with large fonts.
-        const managed = lifted || this.height > 0 || (!cue.vertical && original.line === "auto");
+        const managed = this.height > 0 || (!cue.vertical && original.line === "auto");
         const line = managed ? -paddingLines - rows : original.line;
         const snap = managed ? true : original.snapToLines;
         if (cue.line === line && cue.snapToLines === snap && cached?.key === key) continue;
@@ -315,6 +330,8 @@ export class SubtitleController {
     if (this.ass) void Promise.resolve(this.ass.destroy()).catch(() => {});
     this.ass = null;
     this.originalStyles = [];
+    this.originalEvents = null;
+    this.styled = false;
   }
 
   destroy() { this.clear(); }

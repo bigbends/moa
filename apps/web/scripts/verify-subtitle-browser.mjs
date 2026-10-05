@@ -23,7 +23,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Style: Default,Pretendard,32,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,0,2,20,20,20,1
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:02.00,0:00:04.00,Default,,0,0,0,,SYNC 자막
+Dialogue: 0,0:00:02.00,0:00:04.00,Default,,0,0,0,,{\\bord0\\shad0\\3a&HFF&}SYNC 자막
 `;
 let clip;
 const server = await createServer({
@@ -41,7 +41,7 @@ const server = await createServer({
           res.setHeader('Content-Type', 'text/html');
           res.end(`<!doctype html><html><head><style>
             body { margin: 0; background: #000; } .stage { position: relative; width: 640px; height: 360px; }
-            video { width: 640px; height: 360px; } canvas.JASSUB { position: absolute; pointer-events: none; transform:translateY(calc(-1 * var(--subtitle-lift,8%))); }
+            video { width: 640px; height: 360px; } canvas.JASSUB { position: absolute; pointer-events: none; transform:translateY(calc(-1 * var(--subtitle-lift,0%))); }
             </style></head><body><div class="stage"><video preload="auto"></video></div>
             <script type="module">
             import '/src/styles/player.css';
@@ -78,7 +78,7 @@ const errors = [], external = [], samples = [];
 try {
   await server.listen();
   const base = `http://127.0.0.1:${server.httpServer.address().port}`;
-  browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', ...(process.env.MOA_SOFTWARE_RENDER ? ['--disable-webgl'] : [])] });
+  browser = await chromium.launch({ channel: 'chromium', executablePath: process.env.MOA_CHROMIUM_PATH, headless: true, args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--force-caption-style={}', ...(process.env.MOA_SOFTWARE_RENDER ? ['--disable-webgl'] : [])] });
   const page = await browser.newPage({ viewport: { width: 640, height: 360 } });
   await page.route('**/*', route => {
     const url = new URL(route.request().url());
@@ -133,13 +133,14 @@ try {
       const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0);
       const rgba = ctx.getImageData(0, 0, img.width, img.height).data;
       const background = Array.from(ctx.getImageData(Math.floor(img.width/2),20,1,1).data);
-      let white = 0, minY = img.height, maxY = -1;
+      let white = 0, dark = 0, minY = img.height, maxY = -1;
       for (let i = 0; i < rgba.length; i += 4) {
+        if (rgba[i] < background[0] * .75 && rgba[i + 1] < background[1] * .75 && rgba[i + 2] < background[2] * .75) dark++;
         if (rgba[i] > 150 && rgba[i + 1] > 150 && rgba[i + 2] > 150) {
           white++; const y = Math.floor(i / 4 / img.width); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
         }
       }
-      return { background, white, minY, maxY, time: video.currentTime, activeCues: video.textTracks[0]?.activeCues?.length ?? 0,
+      return { background, white, dark, minY, maxY, time: video.currentTime, activeCues: video.textTracks[0]?.activeCues?.length ?? 0,
         ass: controller.ass ? { offset: controller.ass.timeOffset, demand: controller.ass._lastDemandTime, busy: controller.ass.busy, width: controller.ass._canvas.width, height: controller.ass._canvas.height, style: controller.ass._canvas.style.cssText } : null };
     }, pixels.toString('base64'));
     samples.push({ name, ...measurement });
@@ -174,10 +175,21 @@ try {
   assert.equal(await page.evaluate(() => controller.ass.timeOffset), -1);
   await sample('ass-plus1-before', 2.5, false);
   const baselineAss=await sample('ass-plus1-visible', 3.5, true);
+  await page.evaluate(() => { document.querySelector('.stage').className = 'stage player is-chrome'; video.className = 'player-video'; });
+  const controlsAss=await sample('ass-default-controls',3.5,true);
+  assert.equal(controlsAss.minY, baselineAss.minY, 'ASS defaults must retain authored position when controls appear');
+  assert.equal(controlsAss.maxY, baselineAss.maxY, 'ASS defaults must retain authored size when controls appear');
+  await page.evaluate(() => { document.querySelector('.stage').className = 'stage player is-idle'; });
   await page.evaluate(()=>document.documentElement.style.setProperty('--subtitle-lift','25%'));
   const movedAss=await sample('ass-height25',3.5,true);
   assert.ok(movedAss.maxY<baselineAss.minY,'ASS manual height must move active canvas');
-  await page.evaluate(()=>document.documentElement.style.setProperty('--subtitle-lift','8%'));
+  await page.evaluate(()=>document.documentElement.style.setProperty('--subtitle-lift','0%'));
+  await page.evaluate(()=>controller.setAppearance({size:'medium',background:'soft'}));
+  const softAss=await sample('ass-inline-soft',3.5,true);
+  assert.ok(softAss.dark > baselineAss.dark + 1000, 'ASS background must render despite transparent inline border tags');
+  await page.evaluate(()=>controller.setAppearance({size:'medium',background:'solid'}));
+  const solidAss=await sample('ass-inline-solid',3.5,true);
+  assert.ok(solidAss.dark > baselineAss.dark + 1000, 'ASS solid background must render despite inline border tags');
   await page.evaluate(()=>controller.setAppearance({size:'large',background:'soft'}));
   const largeAss=await sample('ass-large-soft',3.5,true);
   assert.ok(largeAss.maxY-largeAss.minY > baselineAss.maxY-baselineAss.minY, 'ASS font size must visibly increase');
@@ -192,6 +204,8 @@ try {
   await page.evaluate(()=>controller.setAppearance({size:'medium',background:'original'}));
   const resetAss=await sample('ass-appearance-reset',3.5,true);
   assert.equal(resetAss.maxY-resetAss.minY,baselineAss.maxY-baselineAss.minY);
+  assert.equal(resetAss.dark, baselineAss.dark, 'Original ASS appearance must restore the authored inline tags');
+  assert.equal(resetAss.maxY, baselineAss.maxY, 'Original ASS position must remain unchanged');
   await sample('ass-plus1-after', 5.5, false);
   await page.evaluate(() => controller.setOffset(-1));
   await sample('ass-minus1-visible', 1.5, true);
@@ -225,6 +239,11 @@ try {
   });
   await show('vtt');
   const largeVtt = await sample('vtt-css-large', 2.5, true);
+  for (const background of ['none', 'soft', 'solid']) {
+    await page.evaluate(background => { document.querySelector('.stage').className = `stage player cue-large cue-bg-${background}`; return controller.setAppearance({size:'large',background}); }, background);
+    const measured = await sample(`vtt-background-${background}`, 2.5, true);
+    assert.ok(background === 'none' ? measured.dark < largeVtt.dark / 2 : measured.dark >= largeVtt.dark * .9, 'VTT background changes must affect the active cue');
+  }
   await page.evaluate(() => { document.querySelector('.stage').className = 'stage player cue-xlarge'; controller.setAppearance({size:'xlarge',background:'original'}); });
   const xlargeVtt = await sample('vtt-css-xlarge', 2.6, true);
   assert.ok(xlargeVtt.maxY-xlargeVtt.minY > largeVtt.maxY-largeVtt.minY, 'VTT extra large must increase visible glyph height');
@@ -317,7 +336,7 @@ try {
     controller.setAppearance({size:'large',background:'soft'});controller.setHeight(8);
   });
   const wrapped=await sample('bounds-large-8-wrapped',2.8,true);
-  assert.ok(wrapped.maxY < 350,'Automatically wrapped subtitles must keep the bottom inset');
+  assert.ok(wrapped.maxY < 390 * .92,'Automatically wrapped subtitles must keep the bottom inset');
   assert.deepEqual(external, [], 'External network request attempted');
   assert.deepEqual(errors, [], 'Browser errors');
   console.log(JSON.stringify({ result: 'passed', browser: await browser.version(), duration: 8, samples, external, errors, evidence }, null, 2));

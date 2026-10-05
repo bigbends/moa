@@ -4,7 +4,7 @@ import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { subtitleDocument, batches } from '../src/translation/subtitle.js';
-import { Gemini } from '../src/translation/gemini.js';
+import { Gemini, ENDPOINTS, normalizeEndpoint } from '../src/translation/gemini.js';
 import { Translations } from '../src/translation/service.js';
 import { Catalog } from '../src/catalog.js';
 import { Store } from '../src/db.js';
@@ -309,7 +309,13 @@ test('routes enforce admin key writes, profile jobs, account assets and persist 
     assert.ok(!config.body.includes(secret));
     const limits = await env.app.inject({method:'PATCH',url:'/api/admin/translation/config',payload:{requestIntervalMs:0,retryCount:3}});
     assert.equal(limits.statusCode,200);assert.equal(limits.json().retryCount,3);
-    for (const payload of [{requestIntervalMs:-1},{requestIntervalMs:60001},{retryCount:6},{retryCount:1.5}]) {
+    const openai = await env.app.inject({ method: 'PATCH', url: '/api/admin/translation/config', payload: { provider: 'openai', baseUrl: 'https://translation.example/v1', apiKey: 'sk-' + 'a'.repeat(300), model: 'org/model:free', enabled: true } });
+    assert.equal(openai.statusCode, 200);
+    assert.equal(openai.json().provider, 'openai');
+    assert.equal(openai.json().baseUrl, 'https://translation.example/v1');
+    assert.ok(!openai.body.includes('a'.repeat(300)));
+    await env.app.inject({ method: 'PATCH', url: '/api/admin/translation/config', payload: { provider: 'gemini', apiKey: secret, enabled: true } });
+    for (const payload of [{provider:'invalid'},{baseUrl:'http://example.com/v1'},{apiKey:'bad\nkey'},{requestIntervalMs:-1},{requestIntervalMs:60001},{retryCount:6},{retryCount:1.5}]) {
       assert.equal((await env.app.inject({method:'PATCH',url:'/api/admin/translation/config',payload})).statusCode,400);
     }
 
@@ -566,5 +572,68 @@ test('removing a key during an active request does not break the following batch
     const content = 'WEBVTT\n\n' + Array.from({ length: 11 }, (_, i) => `00:00:01.000 --> 00:00:02.000\nLine ${i}`).join('\n\n');
     assert.equal((await wait(f.service, f.service.start('e', 'p', { ...input, content }).id)).state, 'completed');
     assert.deepEqual(used, [secret, 'second-key-stays-active']);
+  } finally { await f.close(); }
+});
+
+
+test('OpenAI-compatible requests use the configured endpoint, bearer key and strict cue IDs', async () => {
+  const endpoint = { provider: 'openai' as const, baseUrl: 'https://translate.example/v1' };
+  const client = new Gemini(async (url, init) => {
+    assert.equal((init!.headers as Record<string, string>).Authorization, `Bearer ${secret}`);
+    assert.equal((init!.headers as Record<string, string>)['x-goog-api-key'], undefined);
+    assert.equal(init!.redirect, 'error');
+    assert.ok(!String(url).includes(secret));
+    if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'org/model:free' }, { id: 'bad?model' }, null] });
+    assert.equal(String(url), endpoint.baseUrl + '/chat/completions');
+    const body = JSON.parse(String(init!.body));
+    assert.equal(body.model, 'org/model:free');
+    assert.equal(body.messages[0].role, 'system');
+    assert.equal(body.response_format.type, 'json_object');
+    const lines = JSON.parse(body.messages[1].content).lines;
+    assert.deepEqual(Object.keys(lines[0]).sort(), ['id', 'text']);
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ lines: lines.map((line: any) => ({ id: line.id, text: '번역' })) }) } }] });
+  });
+  assert.deepEqual(await client.models(secret, new AbortController().signal, endpoint), ['org/model:free']);
+  assert.deepEqual(await client.translate(secret, 'org/model:free', [{ id: 7, text: 'Hello' }], { title: '', sourceLanguage: 'en' }, new AbortController().signal, endpoint), { '7': '번역' });
+  for (const content of ['null', '{"lines":[null]}', '{"lines":[{"id":8,"text":"잘못된 줄"}]}']) {
+    const invalid = new Gemini(async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content } }] }));
+    await assert.rejects(invalid.translate(secret, 'model', [{ id: 7, text: 'Hello' }], { title: '', sourceLanguage: '' }, new AbortController().signal, endpoint), /translation-incomplete/);
+  }
+  await assert.rejects(new Gemini().models(secret, new AbortController().signal, { ...endpoint, baseUrl: 'https://127.0.0.1' }), /translation-unavailable/);
+  for (const url of ['http://api.example/v1', 'https://key:secret@api.example/v1', 'https://api.example/v1?key=secret', 'https://api.example/#key'])
+    assert.throws(() => normalizeEndpoint(url), /translation-endpoint-invalid/);
+});
+
+test('provider changes clear old credentials, persist new settings and isolate cached translations', async () => {
+  let calls = 0;
+  const f = await fixture(async (url, init) => {
+    calls++;
+    if (String(url).includes('generativelanguage')) return fake(url, init);
+    assert.equal((init!.headers as Record<string, string>).Authorization, `Bearer ${'sk-' + 'a'.repeat(300)}`);
+    const lines = JSON.parse(JSON.parse(String(init!.body)).messages[1].content).lines;
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ lines: lines.map((line: any) => ({ id: line.id, text: '다른 번역' })) }) } }] });
+  });
+  try {
+    assert.equal((await wait(f.service, f.service.start('e', 'p', input).id)).state, 'completed');
+    const changed = f.service.configure({ provider: 'openai' });
+    assert.equal(changed.baseUrl, ENDPOINTS.openai);
+    assert.equal(changed.configured, false);
+    assert.equal(changed.enabled, false);
+    assert.equal(changed.model, 'gpt-4.1-mini');
+    f.service.configure({ baseUrl: 'https://translate.example/v1/', apiKey: 'sk-' + 'a'.repeat(300), enabled: true, model: 'org/model:free' });
+    const translated = await wait(f.service, f.service.start('e', 'p', input).id);
+    assert.equal(translated.state, 'completed');
+    assert.equal(translated.cached, false);
+    assert.equal(calls, 2);
+    const reopened = f.create();
+    try {
+      assert.equal(reopened.config().provider, 'openai');
+      assert.equal(reopened.config().baseUrl, 'https://translate.example/v1');
+      assert.equal(reopened.config().model, 'org/model:free');
+      assert.equal(reopened.config().configured, true);
+    } finally { await reopened.close(); }
+    assert.throws(() => f.service.configure({ apiKey: 'key\nheader' }), /translation-key-invalid/);
+    assert.throws(() => f.service.configure({ apiKey: '한글 키' }), /translation-key-invalid/);
+    assert.equal(f.service.configure({ baseUrl: 'https://other.example/v1' }).configured, false);
   } finally { await f.close(); }
 });

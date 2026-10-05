@@ -16,7 +16,7 @@ process.env.VITE_MOCK = '1';
 const server = await createServer({ root: webRoot, configFile: path.join(webRoot, 'vite.config.ts'), cacheDir: path.join(evidence, 'vite-cache'), logLevel: 'warn', server: { port: 0, open: false } });
 await server.listen();
 const base = server.resolvedUrls.local[0].replace(/\/$/, '');
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: process.env.MOA_BROWSER_EXECUTABLE });
 const errors = [];
 const srt = name => ({ name, mimeType: 'application/x-subrip', buffer: Buffer.from(`1\n00:00:01,000 --> 00:00:03,000\n${name} line\n\n2\n00:00:04,000 --> 00:00:06,000\nSecond line\n`) });
 const shot = (page, name) => page.screenshot({ path: path.join(evidence, `${name}.png`) });
@@ -57,10 +57,31 @@ try {
   at('settings', page);
   await page.goto(`${base}/settings#translation`);
   const section = page.locator('#translation');
-  await section.getByText('Gemini API 키').waitFor();
+  await section.getByText('API 키', { exact: true }).waitFor();
   assert.equal(await section.locator('.status-pill').textContent(), '없음');
   assert.equal(await section.getByRole('switch', { name: 'AI 자막 번역' }).isDisabled(), true, 'toggle needs a key first');
-  const keyInput = section.getByLabel('추가할 Gemini API 키');
+  const keyInput = section.getByLabel('추가할 API 키');
+  await section.getByRole('combobox', { name: '번역 API 방식' }).click();
+  await page.getByRole('option', { name: 'OpenAI 호환', exact: true }).click();
+  await section.getByText('API 설정을 저장했어요. 사용할 API 키를 등록해 주세요.').waitFor();
+  assert.equal(await section.getByLabel('번역 API 주소').inputValue(), 'https://api.openai.com/v1');
+  await section.getByLabel('번역 API 주소').fill('https://translation.example/v1');
+  await section.getByRole('button', { name: '주소 저장' }).click();
+  await keyInput.fill('sk-test-provider-key');
+  await section.getByRole('button', { name: '키 저장' }).click();
+  await section.getByText('키 확인 완료 · 사용할 수 있는 모델 2개').waitFor();
+  await section.getByLabel('번역 모델 ID', { exact: true }).fill('org/custom-model:free');
+  await section.getByRole('button', { name: '모델 저장' }).click();
+  await page.waitForFunction(() => document.querySelector('#translation [role=combobox][aria-label="번역 모델"]').textContent === 'org/custom-model:free');
+  const provider = await patch(page, {});
+  assert.equal(provider.provider, 'openai');
+  assert.equal(provider.baseUrl, 'https://translation.example/v1');
+  assert.equal(provider.model, 'org/custom-model:free');
+  await section.getByRole('combobox', { name: '번역 API 방식' }).click();
+  await page.getByRole('option', { name: 'Gemini 호환', exact: true }).click();
+  await section.getByText('API 설정을 저장했어요. 사용할 API 키를 등록해 주세요.').waitFor();
+  assert.equal(await section.locator('.status-pill').textContent(), '없음');
+  assert.equal(await section.getByRole('switch', { name: 'AI 자막 번역' }).isDisabled(), true);
   // The first key is rejected; listing models must fail over to the second one.
   await keyInput.fill('AIza-bad-first-key-0001\nAIza-secret-second-key-0002\n');
   await section.getByText('2개 입력됨').waitFor();
@@ -86,8 +107,9 @@ try {
   await batchInput.fill('80');
   await batchInput.blur();
   await section.getByText('묶음당 80줄로 저장했어요.').waitFor();
-  await section.getByLabel('번역 모델').selectOption('gemini-flash-lite-latest');
-  await page.waitForFunction(() => document.querySelector('#translation select').value === 'gemini-flash-lite-latest');
+  await section.getByRole('combobox', { name: '번역 모델', exact: true }).click();
+  await page.getByRole('option', { name: 'gemini-flash-lite-latest', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('#translation [role=combobox][aria-label="번역 모델"]').textContent === 'gemini-flash-lite-latest');
   await section.getByRole('switch', { name: 'AI 자막 번역' }).click();
   await page.waitForFunction(() => document.querySelector('#translation [role=switch]').getAttribute('aria-checked') === 'true');
   await section.screenshot({ path: path.join(evidence, 'settings-desktop.png') });
@@ -123,7 +145,7 @@ try {
 
   /* ---------- a manual change while translating is respected ---------- */
   at('manual change', page);
-  await page.locator('input[type=file]').setInputFiles(srt('upload-a.srt'));
+  await page.locator('.translate-view input[type=file]').setInputFiles(srt('upload-a.srt'));
   await page.getByRole('radio', { name: /upload-a\.srt/ }).waitFor();
   await page.getByRole('button', { name: '번역 시작' }).click();
   await page.getByRole('progressbar').waitFor();
@@ -140,9 +162,9 @@ try {
   at('failure', page);
   await setKeys(page, ['AIza-fail-key-0003']);
   await entry(page).click();
-  await page.locator('input[type=file]').setInputFiles(srt('upload-b.srt'));
+  await page.locator('.translate-view input[type=file]').setInputFiles(srt('upload-b.srt'));
   await page.getByRole('button', { name: '번역 시작' }).click();
-  await page.getByRole('alert').filter({ hasText: 'Gemini가 응답하지 않았어요' }).waitFor({ timeout: 20000 });
+  await page.getByRole('alert').filter({ hasText: '번역 서비스가 응답하지 않았어요' }).waitFor({ timeout: 20000 });
   await shot(page, 'player-translate-failed');
   await back(page);
   await page.getByRole('button', { name: '번역하지 못했어요 · 다시 시도' }).click();
@@ -210,7 +232,7 @@ try {
   const mobile = await open({ width: 390, height: 844 });
   at('mobile', mobile);
   await mobile.goto(`${base}/settings#translation`);
-  await mobile.locator('#translation').getByLabel('추가할 Gemini API 키').fill('AIza-mobile-key-0005');
+  await mobile.locator('#translation').getByLabel('추가할 API 키').fill('AIza-mobile-key-0005');
   await mobile.locator('#translation').getByRole('button', { name: '키 저장' }).click();
   await mobile.locator('#translation').getByText(/키 확인 완료/).waitFor();
   await mobile.locator('#translation').getByRole('switch', { name: 'AI 자막 번역' }).click();

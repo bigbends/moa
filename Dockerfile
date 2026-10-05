@@ -41,7 +41,7 @@ FROM node:22-bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
     && curl -fsSL https://repo.jellyfin.org/jellyfin_team.gpg.key | gpg --dearmor -o /usr/share/keyrings/jellyfin.gpg \
     && printf '%s\n' 'deb [signed-by=/usr/share/keyrings/jellyfin.gpg] https://repo.jellyfin.org/debian bookworm main' > /etc/apt/sources.list.d/jellyfin.list \
-    && apt-get update && apt-get install -y --no-install-recommends jellyfin-ffmpeg7 libchromaprint-tools \
+    && apt-get update && apt-get install -y --no-install-recommends jellyfin-ffmpeg7 libchromaprint-tools libarchive-tools \
     && mkdir -p /data && chown node:node /data \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app

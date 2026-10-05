@@ -409,7 +409,7 @@ export interface DefaultNavigation { navigation: NavigationTab[] | null }
 export type DefaultNavigationUpdate = DefaultNavigation | { fromProfile: true };
 
 /* ---------- Gemini subtitle translation ---------- */
-export interface TranslationConfig { configured: boolean; enabled: boolean; model: string; batchSize: number; requestIntervalMs: number; retryCount: number; keys: { id: string; label: string }[] }
+export interface TranslationConfig { provider: "gemini" | "openai"; baseUrl: string; configured: boolean; enabled: boolean; model: string; batchSize: number; requestIntervalMs: number; retryCount: number; keys: { id: string; label: string }[] }
 export interface TranslationJob {
   revision: number;
   partial: boolean;

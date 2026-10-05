@@ -1,3 +1,4 @@
+import { importSubtitles } from './subtitle-upload.js';
 import { RemoteAccess, connectorRpc } from './remote-access.js';
 import { readFile } from 'node:fs/promises';
 import { ImageCache, IMAGE_CACHE_TTL } from './image-cache.js';
@@ -169,7 +170,7 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
   app.get('/api/episodes/:id/subtitles/jimaku', { schema: { params: idParams(), querystring: object({ title: { type: 'string', minLength: 1, maxLength: 300 }, season: { type: 'integer', minimum: 1, maximum: 99 }, episode: { type: 'number', minimum: 0, maximum: 10000 } }) } }, async req => jimaku.search(params(req).id, profile(req), query(req)));
   app.post('/api/episodes/:id/subtitles/jimaku/translate', { schema: { params: idParams(), body: object({ searchId: string, candidateId: string, startAt: {type: 'number', minimum: 0, maximum: 864000} }, ['searchId','candidateId']) } }, async req => { const body = req.body as { searchId: string; candidateId: string; startAt?: number }; return jimaku.translate(params(req).id, profile(req), body.searchId, body.candidateId, translations, body.startAt); });
   app.get('/api/translation/config', async () => translations.config());
-  app.patch('/api/admin/translation/config', { schema: { body: object({ apiKey: { type: 'string', minLength: 16, maxLength: 256 }, model: { type: 'string', maxLength: 102 }, enabled: { type: 'boolean' }, clearKey: { type: 'boolean' }, batchSize: { type: 'integer', minimum: 10, maximum: 300 }, requestIntervalMs: { type: 'integer', minimum: 0, maximum: 60000 }, retryCount: { type: 'integer', minimum: 0, maximum: 5 }, addKeys: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 16, maxLength: 256 } }, removeKeyIds: { type: 'array', maxItems: 8, items: { type: 'string', pattern: '^[a-f0-9]{16}$' } } }) } }, async req => translations.configure(req.body as Parameters<Translations['configure']>[0]));
+  app.patch('/api/admin/translation/config', { schema: { body: object({ provider: { type: 'string', enum: ['gemini', 'openai'] }, baseUrl: { type: 'string', maxLength: 2048 }, apiKey: { type: 'string', minLength: 1, maxLength: 512 }, model: { type: 'string', maxLength: 200 }, enabled: { type: 'boolean' }, clearKey: { type: 'boolean' }, batchSize: { type: 'integer', minimum: 10, maximum: 300 }, requestIntervalMs: { type: 'integer', minimum: 0, maximum: 60000 }, retryCount: { type: 'integer', minimum: 0, maximum: 5 }, addKeys: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1, maxLength: 512 } }, removeKeyIds: { type: 'array', maxItems: 8, items: { type: 'string', pattern: '^[a-f0-9]{16}$' } } }) } }, async req => translations.configure(req.body as Parameters<Translations['configure']>[0]));
   app.get('/api/admin/translation/models', async () => translations.models());
   app.post('/api/episodes/:id/subtitles/translate', { bodyLimit: 2 * 1024 * 1024, schema: { params: idParams(), body: object({ content: { type: 'string', minLength: 1, maxLength: 1024 * 1024 }, format: { type: 'string', enum: ['ass','vtt','srt','smi'] }, sourceLabel: { type: 'string', maxLength: 200 }, sourceLanguage: { type: 'string', maxLength: 32 }, startAt: {type: 'number', minimum: 0, maximum: 864000} }, ['content','format','sourceLabel']) } }, async req => translations.start(params(req).id, profile(req), req.body as Parameters<Translations['start']>[2]));
   app.get('/api/episodes/:id/subtitles/translations', { schema: { params: idParams() } }, async req => translations.tracks(params(req).id, profile(req)));
@@ -339,6 +340,10 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
   app.get('/api/episodes/:id/markers', { schema: { params: idParams(), querystring: object({ duration: {type:'number',minimum:60,maximum:21600} }, ['duration']) } }, async req => {
     if (!db.get('SELECT id FROM episodes WHERE id=?',params(req).id)) throw new ApiFailure(404,'episode-not-found');
     return enrichment.remoteMarkers(params(req).id,(req.query as {duration:number}).duration);
+  });
+  app.post('/api/subtitles/import', { bodyLimit: 14 * 1024 * 1024, schema: { body: object({ filename: { type: 'string', minLength: 1, maxLength: 255 }, data: { type: 'string', minLength: 4, maxLength: 14 * 1024 * 1024 } }, ['filename', 'data']) } }, async req => {
+    const body = req.body as { filename: string; data: string };
+    return importSubtitles(body.filename, body.data);
   });
   app.get('/api/episodes/:id/subtitles/online', { schema: { params: idParams(), querystring: object({ title: {type:'string',minLength:1,maxLength:500,pattern:'\\S'}, season: {type:'integer',minimum:1,maximum:99}, episode: {type:'number',minimum:0,maximum:10000}, episodeOffset: {type:'integer',minimum:0,maximum:10000} }) } }, async (req, reply) => {
     const controller = new AbortController();

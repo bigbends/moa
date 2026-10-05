@@ -118,7 +118,7 @@ function playback(episodeId: string): PlaybackSession {
 let tmdbConfig: { configured: boolean; source: string; credentialType: string | null; hasSavedCredential: boolean } = { configured: false, source: "none", credentialType: null, hasSavedCredential: false };
 let remoteAt = 0;
 let remote: any = { mode: "off", state: "off", url: null, urls: [], loginUrl: null, funnel: false, lastError: null, externallyManaged: false, available: true, desiredEnabled: false, gatewayServiceUrl: "http://moa-gateway:8080", warning: null, config: { mode: "off", publicHostname: "", funnel: false, cloudflareToken: null, tailscaleAuthKey: null } };
-let translationConfig: TranslationConfig = { configured: false, enabled: false, model: "gemini-flash-latest", batchSize: 120, requestIntervalMs: 1000, retryCount: 2, keys: [] };
+let translationConfig: TranslationConfig = { provider: "gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta", configured: false, enabled: false, model: "gemini-flash-latest", batchSize: 120, requestIntervalMs: 1000, retryCount: 2, keys: [] };
 // Secrets stay here; the config only carries masked labels. A key containing "fail" fails jobs, "bad" fails validation.
 let translationSecrets: Array<{ id: string; secret: string }> = [];
 const activeKey = () => translationSecrets.find(item => !item.secret.includes("bad"))?.secret ?? "";
@@ -317,6 +317,12 @@ export function installMockApi() {
     }
     if (path === "/translation/config") return json(translationConfig);
     if (path === "/admin/translation/config" && method === "PATCH") {
+      const provider = body.provider ?? translationConfig.provider;
+      const baseUrl = body.baseUrl ?? (provider !== translationConfig.provider ? provider === "openai" ? "https://api.openai.com/v1" : "https://generativelanguage.googleapis.com/v1beta" : translationConfig.baseUrl);
+      if (provider !== translationConfig.provider || baseUrl !== translationConfig.baseUrl) {
+        setSecrets([]);
+        translationConfig = { ...translationConfig, provider, baseUrl, model: provider === "openai" ? "gpt-4.1-mini" : "gemini-flash-latest" };
+      }
       const added = [...(typeof body.apiKey === "string" ? [body.apiKey] : []), ...(Array.isArray(body.addKeys) ? body.addKeys : [])].map((key: string) => key.trim()).filter(Boolean);
       if (translationSecrets.length + added.length > 8) return json({ error: "translation-too-many-keys" }, 400);
       if (body.clearKey) setSecrets([]);
@@ -334,7 +340,7 @@ export function installMockApi() {
     if (path === "/admin/translation/models") {
       if (!translationConfig.configured) return json({ error: "translation-not-configured" }, 400);
       if (!activeKey()) return json({ error: "translation-key-invalid" }, 400);
-      return json({ models: ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-pro-latest"] });
+      return json({ models: translationConfig.provider === "openai" ? ["gpt-4.1-mini", "gpt-4.1"] : ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-pro-latest"] });
     }
     if (/^\/episodes\/[^/]+\/subtitles\/translate$/.test(path) && method === "POST") {
       if (!translationConfig.configured) return json({ error: "translation-not-configured" }, 409);
