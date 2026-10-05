@@ -72,6 +72,8 @@ export class Translations {
   private closed = false;
   private cooldown = new Map<string, number>();
   private preferredKey = 0;
+  private keyTests = new Map<string, { ok: boolean; error?: string }>();
+  private testingKeys = new Set<string>();
   private lastTranslationFinishedAt = 0;
   private janitor: NodeJS.Timeout;
   constructor(
@@ -136,6 +138,7 @@ export class Translations {
       retryCount: this.secret.retryCount,
       keys: this.secret.apiKeys.map((key, i) => ({
         id: digest(key).slice(0, 16),
+        test: this.keyTests.get(digest(key).slice(0, 16)),
         label: `키 ${i + 1} · …${key.slice(-4)}`,
       })),
     };
@@ -199,6 +202,8 @@ export class Translations {
     writeFileSync(this.filename + '.tmp', JSON.stringify(next), { mode: 0o600 });
     chmodSync(this.filename + '.tmp', 0o600);
     renameSync(this.filename + '.tmp', this.filename);
+    if (endpointChanged || next.model !== this.secret.model) this.keyTests.clear();
+    for (const id of this.keyTests.keys()) if (!next.apiKeys.some(key => digest(key).slice(0, 16) === id)) this.keyTests.delete(id);
     this.secret = next;
     this.cooldown.clear();
     this.preferredKey = 0;
@@ -211,6 +216,26 @@ export class Translations {
     if (!this.secret.apiKeys.length) throw new ApiFailure(400, 'translation-not-configured');
     const endpoint = this.secret;
     return { models: await this.withKey((key) => this.gemini.models(key, AbortSignal.timeout(15000), endpoint)) };
+  }
+  async testKey(id: string): Promise<TranslationConfig> {
+    const endpoint = this.secret;
+    const key = endpoint.apiKeys.find(key => digest(key).slice(0, 16) === id);
+    if (!key) throw new ApiFailure(404, 'translation-key-not-found');
+    if (this.testingKeys.has(id)) throw new ApiFailure(409, 'translation-test-running');
+    this.testingKeys.add(id);
+    let result: { ok: boolean; error?: string };
+    try {
+      await this.gemini.translate(key, endpoint.model, [{ id: 0, text: 'Hello.' }], { title: '', sourceLanguage: 'en' }, AbortSignal.timeout(30000), endpoint);
+      result = { ok: true };
+    } catch (error) {
+      result = { ok: false, error: error instanceof ApiFailure ? error.error === 'translation-cancelled' ? 'translation-timeout' : error.error : 'translation-unavailable' };
+    } finally {
+      this.testingKeys.delete(id);
+    }
+    if (this.secret !== endpoint) throw new ApiFailure(409, 'translation-config-changed');
+    this.keyTests.set(id, result);
+    if (result.ok) this.cooldown.delete(key);
+    return this.config();
   }
   private async withKey<T>(operation: (key: string) => Promise<T>): Promise<T> {
     const keys = [...this.secret.apiKeys];
@@ -230,9 +255,9 @@ export class Translations {
         this.preferredKey = index;
         return result;
       } catch (error) {
-        if (!(error instanceof ApiFailure) || !['translation-quota', 'translation-key-invalid'].includes(error.error))
+        if (!(error instanceof ApiFailure) || !['translation-quota', 'translation-credit-exhausted', 'translation-key-invalid', 'translation-permission-denied'].includes(error.error))
           throw error;
-        this.cooldown.set(key, error.error === 'translation-key-invalid' ? Infinity : Date.now() + 60000);
+        this.cooldown.set(key, ['translation-key-invalid', 'translation-permission-denied'].includes(error.error) ? Infinity : Date.now() + 60000);
         last = error;
       }
     }
@@ -241,7 +266,7 @@ export class Translations {
   /** One shared worker serializes generation, including key failover and inter-job spacing. */
   private async translateWithRetry<T>(operation: (key: string) => Promise<T>, signal: AbortSignal): Promise<T> {
     const retryCount = this.secret.retryCount;
-    const retryable = new Set(['translation-quota', 'translation-key-invalid', 'translation-unavailable', 'translation-invalid-response', 'translation-incomplete']);
+    const retryable = new Set(['translation-quota', 'translation-credit-exhausted', 'translation-key-invalid', 'translation-permission-denied', 'translation-unavailable', 'translation-invalid-response', 'translation-incomplete']);
     let last: unknown = new ApiFailure(502, 'translation-quota');
     for (let attempt = 0; attempt <= retryCount; attempt++) {
       signal.throwIfAborted();
@@ -264,8 +289,8 @@ export class Translations {
       } catch (error) {
         last = error;
         if (!(error instanceof ApiFailure) || !retryable.has(error.error) || signal.aborted) throw error;
-        if (error.error === 'translation-key-invalid' || error.error === 'translation-quota') {
-          this.cooldown.set(key, error.error === 'translation-key-invalid' ? Infinity : Date.now() + 60000);
+        if (['translation-key-invalid', 'translation-permission-denied', 'translation-quota', 'translation-credit-exhausted'].includes(error.error)) {
+          this.cooldown.set(key, ['translation-key-invalid', 'translation-permission-denied'].includes(error.error) ? Infinity : Date.now() + 60000);
           this.preferredKey = (index + 1) % keys.length;
         }
       } finally {
@@ -574,6 +599,12 @@ export class Translations {
     if (!row || track !== `translation.${row.format}`) throw new ApiFailure(404, 'subtitle-not-found');
     asset.touched = Date.now();
     return row;
+  }
+  removeSaved(key: string) {
+    if (this.work.has(key)) throw new ApiFailure(409, 'translation-running');
+    this.db.run('DELETE FROM translation_cache WHERE key=?', key);
+    for (const [id, job] of this.jobs) if (job.key === key) this.jobs.delete(id);
+    for (const [id, asset] of this.assets) if (asset.key === key) this.assets.delete(id);
   }
   private prune() {
     const cutoff = Date.now() - TTL;

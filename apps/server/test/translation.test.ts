@@ -307,6 +307,13 @@ test('routes enforce admin key writes, profile jobs, account assets and persist 
     });
     assert.equal(config.statusCode, 200);
     assert.ok(!config.body.includes(secret));
+    const keyTestUrl = `/api/admin/translation/keys/${config.json().keys[0].id}/test`;
+    assert.equal((await env.app.inject({ method: 'POST', url: keyTestUrl, headers: { 'x-moa-account': 'member', 'x-moa-role': 'member' } })).statusCode, 403);
+    const keyTest = await env.app.inject({ method: 'POST', url: keyTestUrl });
+    assert.equal(keyTest.statusCode, 200);
+    assert.deepEqual(keyTest.json().keys[0].test, { ok: true });
+    assert.ok(!keyTest.body.includes(secret));
+
     const limits = await env.app.inject({method:'PATCH',url:'/api/admin/translation/config',payload:{requestIntervalMs:0,retryCount:3}});
     assert.equal(limits.statusCode,200);assert.equal(limits.json().retryCount,3);
     const openai = await env.app.inject({ method: 'PATCH', url: '/api/admin/translation/config', payload: { provider: 'openai', baseUrl: 'https://translation.example/v1', apiKey: 'sk-' + 'a'.repeat(300), model: 'org/model:free', enabled: true } });
@@ -636,4 +643,64 @@ test('provider changes clear old credentials, persist new settings and isolate c
     assert.throws(() => f.service.configure({ apiKey: '한글 키' }), /translation-key-invalid/);
     assert.equal(f.service.configure({ baseUrl: 'https://other.example/v1' }).configured, false);
   } finally { await f.close(); }
+});
+
+
+test('explicit key tests report safe per-key generation failures without failover or automatic requests', async () => {
+  const calls: string[] = [];
+  const errors = [
+    ['invalid-key-0001', 401, 'invalid_api_key', 'translation-key-invalid'],
+    ['denied-key-0002', 403, 'permission_denied', 'translation-permission-denied'],
+    ['credit-key-0003', 429, 'insufficient_quota', 'translation-credit-exhausted'],
+    ['quota-key-0004', 429, 'rate_limit_exceeded', 'translation-quota'],
+    ['model-key-0005', 404, 'model_not_found', 'translation-model-unavailable'],
+  ] as const;
+  const f = await fixture(async (url, init) => {
+    assert.match(String(url), /gemini-pro-latest:generateContent$/);
+    const key = (init!.headers as Record<string, string>)['x-goog-api-key'];
+    calls.push(key);
+    const lines = JSON.parse(JSON.parse(String(init!.body)).contents[0].parts[0].text).lines;
+    assert.deepEqual(lines, [{ id: 0, text: 'Hello.' }]);
+    const failure = errors.find(([value]) => value === key);
+    return failure ? Response.json({ error: { code: failure[2], message: key + secret } }, { status: failure[1] }) : success(lines);
+  });
+  try {
+    const configured = f.service.configure({ clearKey: true, addKeys: [...errors.map(([key]) => key), 'good-key-0006'], model: 'gemini-pro-latest', enabled: false });
+    assert.equal(calls.length, 0);
+    assert.ok(configured.keys.every(key => key.test === undefined));
+    for (let i = 0; i < configured.keys.length; i++) {
+      const result = await f.service.testKey(configured.keys[i].id);
+      assert.deepEqual(result.keys[i].test, i < errors.length ? { ok: false, error: errors[i][3] } : { ok: true });
+      assert.equal(calls.length, i + 1);
+      assert.ok(!JSON.stringify(result).includes(calls[i]));
+    }
+    assert.equal(f.db.get('SELECT COUNT(*) AS n FROM translation_cache').n, 0);
+    const retained = f.service.configure({ addKeys: ['new-key-0007'], batchSize: 80 });
+    assert.deepEqual(retained.keys[0].test, { ok: false, error: 'translation-key-invalid' });
+    assert.equal(retained.keys.at(-1)?.test, undefined);
+    const removed = configured.keys[0].id;
+    f.service.configure({ removeKeyIds: [removed] });
+    await assert.rejects(f.service.testKey(removed), /translation-key-not-found/);
+    assert.equal(calls.length, 6);
+    assert.ok(f.service.configure({ model: 'gemini-flash-latest' }).keys.every(key => key.test === undefined));
+  } finally { await f.close(); }
+});
+
+test('key test rejects duplicate requests and discards results after configuration changes', async () => {
+  let release!: () => void, calls = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const f = await fixture(async (url, init) => { calls++; await gate; return fake(url, init); });
+  try {
+    const id = f.service.config().keys[0].id;
+    const pending = f.service.testKey(id);
+    await assert.rejects(f.service.testKey(id), /translation-test-running/);
+    assert.equal(calls, 1);
+    f.service.configure({ baseUrl: 'https://other.example/v1beta', apiKey: secret });
+    release();
+    await assert.rejects(pending, /translation-config-changed/);
+    assert.equal(f.service.config().keys[0].test, undefined);
+    assert.deepEqual((await f.service.testKey(id)).keys[0].test, { ok: true });
+    f.service.configure({ removeKeyIds: [id] });
+    assert.equal(f.service.configure({ apiKey: secret }).keys[0].test, undefined);
+  } finally { release(); await f.close(); }
 });

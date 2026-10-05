@@ -51,15 +51,17 @@ test('reads ZIP and 7z subtitle entries without extracting paths, rejects invali
 
 test('subtitle import route requires a profile and validates the request', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'moa-upload-api-'));
-  const { app } = await buildApp({ dataDir: directory, mediaRoot: directory }, false);
+  const { app, db } = await buildApp({ dataDir: directory, mediaRoot: directory }, false);
   try {
-    const payload = { filename: '한국어.srt', data: encode(srt) };
+    const payload = { episodeId: 'e', filename: '한국어.srt', data: encode(srt) };
     assert.equal((await app.inject({ method: 'POST', url: '/api/subtitles/import', payload })).statusCode, 401);
     const profile = (await app.inject({ method: 'POST', url: '/api/profiles', payload: { name: '테스트', color: 'blue' } })).json();
     const headers = { 'x-moa-profile': profile.id };
+    db.run("INSERT INTO media VALUES('m',NULL,'작품','movie','{}','2026')");
+    db.run("INSERT INTO episodes VALUES('e','m',1,1,'회차',600,NULL)");
     const response = await app.inject({ method: 'POST', url: '/api/subtitles/import', payload, headers });
     assert.equal(response.statusCode, 200);
-    assert.match(response.json()[0].content, /안녕하세요/);
+    assert.match((await app.inject(response.json()[0].url)).body, /안녕하세요/);
     assert.equal((await app.inject({ method: 'POST', url: '/api/subtitles/import', payload: { ...payload, data: 'invalid!' }, headers })).statusCode, 400);
   } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
 });

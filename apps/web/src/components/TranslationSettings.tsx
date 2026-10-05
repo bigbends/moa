@@ -5,7 +5,7 @@ import { KeyRound, Trash2 } from 'lucide-react';
 import { ApiError } from '../lib/api';
 import { cx } from '../lib/format';
 import {
-  BATCH_SIZE, patchTranslationConfig, translationErrorMessage, translationKeys, translationModels, TRANSLATION_MAX_KEYS, useTranslationConfig,
+  BATCH_SIZE, patchTranslationConfig, translationErrorMessage, translationKeys, translationModels, testTranslationKey, TRANSLATION_MAX_KEYS, useTranslationConfig,
   type TranslationConfig, type TranslationConfigPatch
 } from '../api/translation';
 import { Button, IconButton, Select, Skeleton } from './ui';
@@ -31,7 +31,7 @@ export function TranslationSettings() {
 
   const loadModels = useMutation({
     mutationFn: translationModels,
-    onSuccess: data => { setModels(data.models); setMessage({ text: `키 확인 완료 · 사용할 수 있는 모델 ${data.models.length}개` }); },
+    onSuccess: data => { setModels(data.models); setMessage({ text: `모델 목록을 불러왔어요 · ${data.models.length}개` }); },
     onError: error => setMessage({ text: apiMessage(error, '모델 목록을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.'), error: true })
   });
   const save = useMutation({
@@ -40,7 +40,7 @@ export function TranslationSettings() {
       client.setQueryData<TranslationConfig>(translationKeys.config, data);
       if (patch.provider !== undefined || patch.baseUrl !== undefined) { setEndpoint(null); setModels(null); setCustomModel(''); setMessage({ text: 'API 설정을 저장했어요. 사용할 API 키를 등록해 주세요.' }); }
       else if (patch.model !== undefined) { setCustomModel(''); setMessage(null); }
-      else if (patch.addKeys) { setDraft(''); setMessage({ text: `키 ${patch.addKeys.length}개를 저장했어요. 확인하는 중…` }); loadModels.mutate(); }
+      else if (patch.addKeys) { setDraft(value => [...new Set(value.split(/\r?\n/).map(line => line.trim()).filter(Boolean))].join('\n') === patch.addKeys!.join('\n') ? '' : value); setMessage({ text: `키 ${patch.addKeys.length}개를 저장했어요. 모델 목록을 불러오는 중…` }); loadModels.mutate(); }
       else if (patch.removeKeyIds) { setMessage({ text: data.keys.length ? '키를 지웠어요.' : '키를 모두 지웠어요. 번역을 사용할 수 없어요.' }); if (!data.keys.length) setModels(null); }
       else if (patch.batchSize !== undefined) { setBatch(null); setMessage({ text: `묶음당 ${data.batchSize}줄로 저장했어요.` }); }
       else setMessage(null);
@@ -51,8 +51,17 @@ export function TranslationSettings() {
     }
   });
 
+  const testKey = useMutation({
+    mutationFn: testTranslationKey,
+    onSuccess: data => { client.setQueryData<TranslationConfig>(translationKeys.config, data); setMessage(null); },
+    onError: error => {
+      setMessage({ text: apiMessage(error, '키를 검사하지 못했어요. 다시 시도해 주세요.'), error: true });
+      void client.invalidateQueries({ queryKey: translationKeys.config });
+    }
+  });
+
   const c = config.data;
-  const busy = save.isPending || loadModels.isPending;
+  const busy = save.isPending || loadModels.isPending || testKey.isPending;
   const keys = c?.keys ?? [];
   const lines = [...new Set(draft.split(/\r?\n/).map(line => line.trim()).filter(Boolean))];
   const room = TRANSLATION_MAX_KEYS - keys.length;
@@ -90,14 +99,18 @@ export function TranslationSettings() {
 
         <div className="translation-keys">
           <div className="translation-keys-head">
-            <div><b>API 키</b><small>등록한 순서대로 쓰고, 한도나 오류로 막히면 다음 키로 넘어가요. 저장한 키는 다시 보여 주지 않아요.</small></div>
+            <div><b>API 키</b><small>등록한 순서대로 쓰고, 한도나 오류로 막히면 다음 키로 넘어가요. 테스트를 누르면 현재 모델로 한 줄을 번역해 키·권한·한도를 확인하며 API 사용료가 발생할 수 있어요.</small></div>
             <span className={cx('status-pill', c.configured && 'is-ok')}>{keys.length ? `${keys.length}개` : '없음'}</span>
           </div>
           {keys.length > 0 && <ol className="translation-key-list" aria-label="등록된 키">
-            {keys.map((key, i) => <li key={key.id}>
+            {keys.map((key, i) => <li key={key.id} className={cx(key.test?.ok === false && 'is-invalid')}>
               <span className="translation-key-order">{i + 1}</span>
               <KeyRound size={16} aria-hidden="true" />
-              <code>{key.label}</code>
+              <div className="translation-key-content">
+                <code>{key.label}</code>
+                <small className={cx('translation-key-result', key.test?.ok && 'is-ok')} role="status">{testKey.isPending && testKey.variables === key.id ? '검사 중…' : key.test ? key.test.ok ? '정상 · 현재 모델로 번역할 수 있어요.' : translationErrorMessage(key.test.error) : '검사하지 않음'}</small>
+              </div>
+              <Button type="button" aria-label={`${i + 1}번 키 테스트`} disabled={busy} onClick={() => testKey.mutate(key.id)}>테스트</Button>
               <IconButton label={`${i + 1}번 키 지우기`} disabled={busy} onClick={() => { if (confirm(`${i + 1}번 키(${key.label})를 지울까요?${keys.length === 1 ? ' 마지막 키라 번역을 사용할 수 없게 돼요.' : ''}`)) save.mutate({ removeKeyIds: [key.id] }); }}><Trash2 size={16} /></IconButton>
             </li>)}
           </ol>}

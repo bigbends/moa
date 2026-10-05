@@ -69,7 +69,10 @@ try {
   await section.getByRole('button', { name: '주소 저장' }).click();
   await keyInput.fill('sk-test-provider-key');
   await section.getByRole('button', { name: '키 저장' }).click();
-  await section.getByText('키 확인 완료 · 사용할 수 있는 모델 2개').waitFor();
+  await section.getByText('모델 목록을 불러왔어요 · 2개').waitFor();
+  await section.getByRole('button', { name: '1번 키 테스트' }).click();
+  await section.locator('.translation-key-result').getByText('정상 · 현재 모델로 번역할 수 있어요.').waitFor();
+
   await section.getByLabel('번역 모델 ID', { exact: true }).fill('org/custom-model:free');
   await section.getByRole('button', { name: '모델 저장' }).click();
   await page.waitForFunction(() => document.querySelector('#translation [role=combobox][aria-label="번역 모델"]').textContent === 'org/custom-model:free');
@@ -77,6 +80,7 @@ try {
   assert.equal(provider.provider, 'openai');
   assert.equal(provider.baseUrl, 'https://translation.example/v1');
   assert.equal(provider.model, 'org/custom-model:free');
+  assert.equal(provider.keys[0].test, undefined, 'model changes clear the previous test result');
   await section.getByRole('combobox', { name: '번역 API 방식' }).click();
   await page.getByRole('option', { name: 'Gemini 호환', exact: true }).click();
   await section.getByText('API 설정을 저장했어요. 사용할 API 키를 등록해 주세요.').waitFor();
@@ -86,12 +90,33 @@ try {
   await keyInput.fill('AIza-bad-first-key-0001\nAIza-secret-second-key-0002\n');
   await section.getByText('2개 입력됨').waitFor();
   await section.getByRole('button', { name: '키 저장' }).click();
-  await section.getByText('키 확인 완료 · 사용할 수 있는 모델 3개').waitFor();
+  await section.getByText('모델 목록을 불러왔어요 · 3개').waitFor();
   assert.equal(await section.locator('.status-pill').textContent(), '2개');
   assert.equal(await section.locator('.translation-key-list li').count(), 2);
   assert.equal(await keyInput.inputValue(), '', 'key input is cleared after saving');
   const html = await page.content();
   assert.equal(html.includes('bad-first-key') || html.includes('secret-second-key'), false, 'saved keys never appear in the page');
+  assert.equal(await section.getByText('검사하지 않음', { exact: true }).count(), 2, 'adding keys never starts paid tests');
+  await section.getByRole('button', { name: '1번 키 테스트' }).click();
+  await section.getByText('검사 중…', { exact: true }).waitFor();
+  assert.equal(await section.getByRole('button', { name: '1번 키 지우기' }).isDisabled(), true);
+  assert.equal(await section.getByRole('combobox', { name: '번역 API 방식' }).isDisabled(), true);
+  await section.locator('.translation-key-list li.is-invalid').getByText('API 키가 유효하지 않거나 만료됐어요. 키를 확인해 주세요.').waitFor();
+  await section.getByRole('button', { name: '2번 키 테스트' }).click();
+  await section.getByText('정상 · 현재 모델로 번역할 수 있어요.').waitFor();
+  await keyInput.fill('AIza-quota-key-0003');
+  await section.getByRole('button', { name: '키 저장' }).click();
+  await section.getByText('모델 목록을 불러왔어요 · 3개').waitFor();
+  await section.getByRole('button', { name: '3번 키 테스트' }).click();
+  await section.getByText('번역 API 사용 한도를 넘었어요. 관리자에게 알려 주세요.').waitFor();
+  assert.equal(await section.locator('.translation-key-list li.is-invalid').count(), 2);
+  assert.equal(await section.getByText('정상 · 현재 모델로 번역할 수 있어요.').count(), 1, 'adding another key preserves existing results');
+  assert.equal(await section.locator('.translation-key-list li.is-invalid code').first().evaluate(element => getComputedStyle(element).color), 'rgb(255, 90, 106)');
+  await section.screenshot({ path: path.join(evidence, 'keys-tested-desktop.png') });
+  page.once('dialog', dialog => dialog.accept());
+  await section.getByRole('button', { name: '3번 키 지우기' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.translation-key-list li').length === 2);
+
   page.once('dialog', dialog => dialog.accept());
   await section.getByRole('button', { name: '1번 키 지우기' }).click();
   await page.waitForFunction(() => document.querySelectorAll('.translation-key-list li').length === 1);
@@ -234,7 +259,12 @@ try {
   await mobile.goto(`${base}/settings#translation`);
   await mobile.locator('#translation').getByLabel('추가할 API 키').fill('AIza-mobile-key-0005');
   await mobile.locator('#translation').getByRole('button', { name: '키 저장' }).click();
-  await mobile.locator('#translation').getByText(/키 확인 완료/).waitFor();
+  await mobile.locator('#translation').getByText(/모델 목록을 불러왔어요/).waitFor();
+  await mobile.locator('#translation').getByLabel('추가할 API 키').fill('AIza-bad-mobile-key-0006');
+  await mobile.locator('#translation').getByRole('button', { name: '키 저장' }).click();
+  await mobile.locator('#translation').getByRole('button', { name: '2번 키 테스트' }).click();
+  await mobile.locator('.translation-key-list li.is-invalid').waitFor();
+
   await mobile.locator('#translation').getByRole('switch', { name: 'AI 자막 번역' }).click();
   await mobile.waitForFunction(() => document.querySelector('#translation [role=switch]').getAttribute('aria-checked') === 'true');
   await mobile.locator('#translation').screenshot({ path: path.join(evidence, 'settings-mobile.png') });

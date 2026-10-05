@@ -19,6 +19,6 @@ export function PlaybackSources({episodeId,position,onClose,onPlay}:{episodeId:s
  {context.isError || group.isError ? <p role="alert">다른 소스를 불러오지 못했습니다.</p> : <div className="source-directory-links">{group.data?.members.filter(m=>m.id!==context.data?.mediaId).map(m=><Button key={m.id} aria-pressed={selected===m.id} onClick={()=>{setSelected(m.id);setEpisode('');}}>{m.provider.name}</Button>)}</div>}
  {group.data && group.data.members.length<2 && <p>연결된 다른 소스가 없습니다. 작품 상세에서 같은 작품을 묶어 주세요.</p>}
  {selected && (detail.isPending?<p>회차를 불러오는 중…</p>:detail.isError?<p role="alert">이 소스의 회차를 불러오지 못했습니다. <Button onClick={()=>void detail.refetch()}>다시 시도</Button></p>:<label className="field">재생할 회차<Select aria-label="다른 소스의 회차" value={target} onChange={setEpisode} options={[{value:'',label:'회차를 선택하세요'},...episodes.map(e=>({value:e.id,label:`시즌 ${e.season} · ${e.number}화 · ${e.title}`}))]} /></label>)}
- {position>0 && <label><input type="checkbox" checked={resume} onChange={e=>setResume(e.target.checked)}/> 현재 위치 {clock(position)}부터 이어보기</label>}
+ {position>0 && <label className="source-choice"><input type="checkbox" checked={resume} onChange={e=>setResume(e.target.checked)}/> 현재 위치 {clock(position)}부터 이어보기</label>}
  <div className="hero-actions"><Button variant="primary" disabled={!target || !episodes.some(e=>e.id===target)} onClick={()=>onPlay(target,resume?position:0)}>이 회차로 재생</Button><Button onClick={onClose}>닫기</Button></div></div></div>;
 }

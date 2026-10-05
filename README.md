@@ -101,6 +101,7 @@ MOA에는 **기본 확장 저장소가 없습니다.** 설정 → 소스에서 �
 - [배포](docs/DEPLOYMENT.md) — Docker로 설치하기, 로그인, 외부 접속
 - [구조](docs/ARCHITECTURE.md) — 서버, 웹, 확장 런타임, APK 브리지
 - [개발](docs/DEVELOPMENT.md) — 로컬 실행과 테스트
+- [웹사이트 플러그인](docs/PLUGINS.md) — 화면 도구, 자막 가져오기 API와 [개발 템플릿](plugins/template/README.md)
 - [기여 안내](CONTRIBUTING.md) · [보안 제보](SECURITY.md)
 
 ## 기술 스택

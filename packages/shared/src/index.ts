@@ -14,6 +14,7 @@ export interface Page<T> { items: T[]; page: number; hasNextPage: boolean; total
 /* ---------- Profiles ---------- */
 
 export interface Profile {
+  hasPin?: boolean;
   avatar?: string | null;
   id: string;
   name: string;
@@ -201,6 +202,20 @@ export interface ClientCapabilities {
   maxHeight?: number;
 }
 
+export interface WebsitePlugin {
+  apiVersion: 1;
+  revision: string;
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  placements: Array<'settings' | 'player'>;
+  permissions: Array<'player.context' | 'subtitles.import'>;
+  connect: string[];
+  enabled: boolean;
+}
+export interface WebsitePluginPackage extends Omit<WebsitePlugin, 'enabled' | 'revision'> { html: string }
+
 export interface SubtitleTrack {
   id: string;
   label: string;
@@ -214,6 +229,18 @@ export interface SubtitleTrack {
   source?: "embedded" | "local" | "extension" | "upload" | "online" | "translation";
   /** Online subtitles: who made it and where it came from (display as text). */
   provenance?: { creatorName: string; sourceUrl: string };
+}
+
+export interface SavedSubtitle {
+  id: string;
+  source: 'upload' | 'translation' | 'online';
+  name: string;
+  title: string;
+  profile: string | null;
+  format: 'ass' | 'vtt';
+  bytes: number;
+  createdAt: number;
+  complete: boolean;
 }
 
 /* ---------- Online Korean subtitles (packages/subtitles-ko) ---------- */
@@ -409,7 +436,7 @@ export interface DefaultNavigation { navigation: NavigationTab[] | null }
 export type DefaultNavigationUpdate = DefaultNavigation | { fromProfile: true };
 
 /* ---------- Gemini subtitle translation ---------- */
-export interface TranslationConfig { provider: "gemini" | "openai"; baseUrl: string; configured: boolean; enabled: boolean; model: string; batchSize: number; requestIntervalMs: number; retryCount: number; keys: { id: string; label: string }[] }
+export interface TranslationConfig { provider: "gemini" | "openai"; baseUrl: string; configured: boolean; enabled: boolean; model: string; batchSize: number; requestIntervalMs: number; retryCount: number; keys: { id: string; label: string; test?: { ok: boolean; error?: string } }[] }
 export interface TranslationJob {
   revision: number;
   partial: boolean;

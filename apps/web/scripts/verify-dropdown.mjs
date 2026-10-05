@@ -89,6 +89,10 @@ try {
     await page.getByRole('option', { name: 'Aniyomi APK', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('[aria-label="확장 저장소 형식"]').textContent === 'Aniyomi APK');
     await page.waitForFunction(() => document.querySelector('[aria-label="확장 저장소 형식"]').getAttribute('aria-expanded') === 'false');
+    const controls = await page.locator('.source-repository').evaluate(form => [...form.querySelectorAll('input, .dropdown-trigger, .btn')].map(element => { const box = element.getBoundingClientRect(); return { height: box.height, bottom: box.bottom }; }));
+    assert.ok(controls.every(control => control.height === 40));
+    if (width > 600) assert.ok(controls.every(control => Math.abs(control.bottom - controls[0].bottom) < 1));
+    await page.screenshot({ path: verificationPath(`source-controls-${width}.png`), animations: 'disabled' });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await page.goto(`${base}accounts`);
     await page.locator('.account-main').click();

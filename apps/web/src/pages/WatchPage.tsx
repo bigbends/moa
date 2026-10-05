@@ -1,4 +1,5 @@
 import { importSubtitleFile, exportSubtitle, SUBTITLE_FILES } from '../player/subtitle-files';
+import { PluginTools } from '../components/WebsitePlugins';
 import { preparePlayback, retirePlayback } from '../player/session-lifecycle';
 import { subtitlesOffForTitle, rememberSubtitlesOff, subtitleOffsetForTitle, rememberSubtitleOffset } from "../player/subtitle-preference";
 import { enterFullscreen } from "../lib/playback-fullscreen";
@@ -163,8 +164,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
   const [draggingSubtitle, setDraggingSubtitle] = useState(false);
   const subtitleInput = useRef<HTMLInputElement>(null);
   const uploadAbort = useRef<AbortController | null>(null);
-  const uploadUrls = useRef<string[]>([]);
-  useEffect(() => () => { uploadAbort.current?.abort(); uploadUrls.current.forEach(url => URL.revokeObjectURL(url)); }, []);
+  useEffect(() => () => { uploadAbort.current?.abort(); }, []);
   const [online, setOnline] = useState<{ status: "idle" | "searching" | "done" | "error"; result?: OnlineSubtitleSearch; applying?: string }>({ status: "idle" });
   const [notice, setNotice] = useState<string | { text: string; action: { label: string; run: () => void } } | null>(null);
   const onlineAbort = useRef<AbortController | null>(null);
@@ -515,8 +515,8 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
     if (!track && autoJob) { void cancelTranslation(); setNotice("자막을 꺼서 자동 번역을 멈췄어요"); }
   };
 
-  const addSubtitleFiles = async (files: File[]) => {
-    if (!files.length) return;
+  const addSubtitleFiles = async (files: File[]): Promise<boolean> => {
+    if (!files.length) return false;
     const choice = ++subtitleChoice.current;
     uploadAbort.current?.abort();
     applyAbort.current?.abort();
@@ -528,19 +528,19 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
     try {
       if (files.length > 32) throw new Error('자막 파일은 한 번에 32개까지 선택해 주세요.');
       for (const file of files) {
-        const imported = await importSubtitleFile(file, controller.signal);
+        const imported = await importSubtitleFile(file, episodeId, controller.signal);
         tracks.push(...imported);
         if (tracks.length > 32) throw new Error('자막은 한 번에 32개까지 가져올 수 있어요.');
       }
       controller.signal.throwIfAborted();
-      uploadUrls.current.push(...tracks.map(track => track.url));
-      setExtraSubs(list => [...list, ...tracks]);
+      setExtraSubs(list => [...list.filter(item => !tracks.some(track => track.id === item.id)), ...tracks]);
       if (tracks.length === 1 && subtitleChoice.current === choice) chooseSubtitle(tracks[0]);
       else setNotice('가져온 자막 중 사용할 파일을 선택해 주세요.');
       setPanel('subs');
+      return true;
     } catch (error) {
-      tracks.forEach(track => URL.revokeObjectURL(track.url));
       if (!controller.signal.aborted) setNotice(error instanceof Error ? error.message : '자막 파일을 읽지 못했어요.');
+      return false;
     } finally { if (!controller.signal.aborted) setImporting(false); }
   };
 
@@ -1091,7 +1091,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
         </div>
       )}
 
-      {sourcePicker && <PlaybackSources episodeId={episodeId} position={live?0:video.current?.currentTime || time || session?.startPosition || 0} onClose={()=>setSourcePicker(false)} onPlay={(id,at)=>{saveProgress(true); handingOff.current = isTranslationTrack(subtitle) && translation.handoff(id); navigate(`/watch/${encodeURIComponent(id)}?t=${Math.max(0,Math.floor(at))}`, { state: isTranslationTrack(subtitle) ? { subtitle, offset: subOffset } : null });}}/>}
+      {sourcePicker && <PlaybackSources episodeId={episodeId} position={live?0:video.current?.currentTime || time || session?.startPosition || 0} onClose={()=>setSourcePicker(false)} onPlay={(id,at)=>{saveProgress(true); handingOff.current = isTranslationTrack(subtitle) && translation.handoff(id); navigate(`/watch/${encodeURIComponent(id)}?t=${Math.max(0,Math.floor(at))}`, { state: isTranslationTrack(subtitle) || subtitle?.source === 'upload' ? { subtitle, offset: subOffset } : null });}}/>}
       <footer className="player-bottom">
         {!live && <div className="seek" ref={bar} onPointerDown={onBarDown} onPointerMove={onBarMove} onPointerUp={onBarUp} onPointerLeave={() => setHover(null)}
           role="slider" aria-label="재생 위치" aria-valuemin={0} aria-valuemax={Math.round(total)} aria-valuenow={Math.round(shown)} aria-valuetext={clock(shown)} tabIndex={0}>
@@ -1157,6 +1157,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
               <section className="panel-col">
                 <h3>자막</h3>
                 <button className="opt opt-action subtitle-upload" disabled={importing} onClick={() => subtitleInput.current?.click()}>{importing ? <Spinner size={18} /> : <FileUp size={18} />}<span>{importing ? '자막을 읽는 중…' : '자막 파일 선택'}<small>파일을 여기에 끌어 놓아도 돼요</small></span></button>
+                <PluginTools episodeId={episodeId} title={titleLine.join(' · ')} getTime={() => video.current?.currentTime || 0} onImport={addSubtitleFiles} />
                 <button className={cx("opt", !subtitle && "is-active")} onClick={() => chooseSubtitle(null)}><Check size={18} className="opt-check" /><span>끄기</span></button>
                 {allSubs.map(track => (
                   <button key={track.id} className={cx("opt", subtitle?.id === track.id && "is-active")} onClick={() => chooseSubtitle(track)}>

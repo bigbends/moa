@@ -1,0 +1,39 @@
+<style>
+  body { display: grid; gap: 16px; }
+  h1 { font-size: 18px; margin: 0; }
+  label { display: grid; gap: 8px; }
+  textarea, input, button { border: 1px solid #444; border-radius: 8px; padding: 10px; background: #252529; color: #fafafa; }
+  textarea { width: 100%; min-height: 140px; resize: vertical; }
+  button { background: #a78bfa; color: #16121e; font-weight: 650; }
+  button:disabled { opacity: .5; }
+  p { margin: 0; }
+</style>
+<h1>자막 가져오기</h1>
+<p id="context">현재 회차를 확인하는 중…</p>
+<label>자막 파일<input id="file" type="file" accept=".srt,.vtt,.vvt,.ass,.ssa,.smi,.sami,.zip,.7z,.rar" disabled></label>
+<label>자막 내용<textarea id="content" placeholder="WEBVTT&#10;&#10;00:00.000 --> 00:05.000&#10;안녕하세요."></textarea></label>
+<button id="save" type="button" disabled>내용을 자막으로 저장</button>
+<p id="status" role="status"></p>
+<script>
+  const file = document.querySelector('#file');
+  const save = document.querySelector('#save');
+  const status = document.querySelector('#status');
+  moa.context().then(context => {
+    document.querySelector('#context').textContent = context ? context.title : '재생 화면의 자막 및 음성 메뉴에서 이 도구를 열어 주세요.';
+    file.disabled = save.disabled = !context;
+  }).catch(error => status.textContent = error.message);
+  async function upload(value) {
+    if (!value) return;
+    file.disabled = save.disabled = true;
+    status.textContent = '자막을 저장하는 중…';
+    try { await moa.importSubtitles(value); status.textContent = '서버에 저장했어요. 창을 닫고 자막을 확인해 주세요.'; }
+    catch (error) { status.textContent = error.message; }
+    finally { file.disabled = save.disabled = false; }
+  }
+  file.addEventListener('change', () => { void upload(file.files[0]); file.value = ''; });
+  save.addEventListener('click', () => {
+    const content = document.querySelector('#content').value;
+    if (!content.trim()) { status.textContent = '자막 내용을 입력해 주세요.'; return; }
+    void upload(new File([content], 'pasted.vtt', { type: 'text/vtt' }));
+  });
+</script>

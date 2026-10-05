@@ -125,7 +125,7 @@ const activeKey = () => translationSecrets.find(item => !item.secret.includes("b
 const mask = (secret: string) => `${secret.slice(0, 4)}…${secret.slice(-4)}`;
 function setSecrets(next: typeof translationSecrets) {
   translationSecrets = next.slice(0, 8);
-  const keys = translationSecrets.map(item => ({ id: item.id, label: mask(item.secret) }));
+  const keys = translationSecrets.map(item => ({ id: item.id, label: mask(item.secret), test: translationConfig.keys.find(key => key.id === item.id)?.test }));
   translationConfig = { ...translationConfig, keys, configured: keys.length > 0, enabled: translationConfig.enabled && keys.length > 0 };
 }
 // Like the server: work is shared per cache key (same original), batches run near `startAt` first
@@ -328,13 +328,20 @@ export function installMockApi() {
       if (body.clearKey) setSecrets([]);
       if (Array.isArray(body.removeKeyIds)) setSecrets(translationSecrets.filter(item => !body.removeKeyIds.includes(item.id)));
       if (added.length) setSecrets([...translationSecrets, ...added.filter((secret: string) => !translationSecrets.some(item => item.secret === secret)).map((secret: string, i: number) => ({ id: `k${Date.now().toString(36)}${i}`, secret }))]);
-      if (typeof body.model === "string") translationConfig = { ...translationConfig, model: body.model };
+      if (typeof body.model === "string" && body.model !== translationConfig.model) translationConfig = { ...translationConfig, model: body.model, keys: translationConfig.keys.map(({ test, ...key }) => key) };
       if (body.requestIntervalMs !== undefined && !(Number.isInteger(body.requestIntervalMs) && body.requestIntervalMs >= 0 && body.requestIntervalMs <= 60_000)) return json({ error: "translation-config-invalid" }, 400);
       if (body.retryCount !== undefined && !(Number.isInteger(body.retryCount) && body.retryCount >= 0 && body.retryCount <= 5)) return json({ error: "translation-config-invalid" }, 400);
       if (body.requestIntervalMs !== undefined) translationConfig = { ...translationConfig, requestIntervalMs: body.requestIntervalMs };
       if (body.retryCount !== undefined) translationConfig = { ...translationConfig, retryCount: body.retryCount };
       if (typeof body.batchSize === "number") translationConfig = { ...translationConfig, batchSize: Math.min(300, Math.max(10, Math.round(body.batchSize))) };
       if (typeof body.enabled === "boolean") translationConfig = { ...translationConfig, enabled: body.enabled && translationConfig.configured };
+      return json(translationConfig);
+    }
+    if (/^\/admin\/translation\/keys\/[^/]+\/test$/.test(path) && method === "POST") {
+      const id = decodeURIComponent(path.split("/")[4]), key = translationSecrets.find(key => key.id === id);
+      if (!key) return json({ error: "translation-key-not-found" }, 404);
+      const error = key.secret.includes("bad") ? "translation-key-invalid" : key.secret.includes("quota") ? "translation-quota" : key.secret.includes("fail") ? "translation-unavailable" : undefined;
+      translationConfig = { ...translationConfig, keys: translationConfig.keys.map(key => key.id === id ? { ...key, test: { ok: !error, ...(error ? { error } : {}) } } : key) };
       return json(translationConfig);
     }
     if (path === "/admin/translation/models") {

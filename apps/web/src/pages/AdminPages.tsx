@@ -1,3 +1,5 @@
+import { WebsitePlugins } from '../components/WebsitePlugins';
+import { SubtitleLibrarySettings } from '../components/SubtitleLibrarySettings';
 import { remotePreference, setRemotePreference, type RemotePreference } from "../lib/remote";
 import { NavigationSettings } from "../components/NavigationSettings";
 import { devicePrefs, setDevicePref, type DevicePrefs } from "../lib/device-prefs";
@@ -226,6 +228,7 @@ export function SettingsPage() {
       </div></section>
       <section className="settings-group"><h2>정보</h2><div className="settings-card">{link("/about", <Info size={20} />, "정보/크레딧", "작품 정보 제공 및 오픈소스 라이선스")}</div></section>
       <NavigationSettings />
+      <WebsitePlugins admin={admin} />
       {admin && <><section className="settings-group">
         <h2>소스와 라이브러리</h2>
         <div className="settings-card">
@@ -237,6 +240,7 @@ export function SettingsPage() {
         <p className="settings-hint">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
       </section>
       <TranslationSettings />
+      <SubtitleLibrarySettings />
       <NetworkSettings /></>}
     </div>
   );

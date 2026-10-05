@@ -376,7 +376,7 @@
 
 /* ---------- Select / fields ---------- */
 .dropdown { display: inline-flex; min-width: 0; max-width: 100%; vertical-align: middle; }
-.dropdown-trigger { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; min-width: 0; min-height: 40px; padding: 9px 12px; border: 1px solid var(--hairline-strong); border-radius: var(--radius-s); background: var(--surface-2); color: var(--text); font-weight: 600; text-align: left; }
+.dropdown-trigger { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; min-width: 0; height: 40px; padding: 0 12px; border: 1px solid var(--hairline-strong); border-radius: var(--radius-s); background: var(--surface-2); color: var(--text); font-weight: 600; text-align: left; }
 .dropdown-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dropdown-trigger > svg { color: var(--text-3); }
 .dropdown-trigger:hover:not(:disabled), .dropdown-trigger[aria-expanded=true] { border-color: var(--text-3); }
@@ -387,12 +387,28 @@
 .dropdown-option.is-active { background: var(--surface-3); }
 .dropdown-option[aria-selected=true] { color: var(--accent-strong); font-weight: 700; }
 .field { display: grid; gap: 6px; font-size: .85rem; color: var(--text-3); font-weight: 600; }
-.field input { height: 40px; padding: 0 12px; border: 1px solid var(--hairline-strong); border-radius: var(--radius-s); background: var(--surface-1); color: var(--text); }
+.field input:not([type=checkbox]) { height: 40px; padding: 0 12px; border: 1px solid var(--hairline-strong); border-radius: var(--radius-s); background: var(--surface-1); color: var(--text); }
 .field input:focus { outline: none; border-color: rgba(255, 255, 255, .5); }
 .segmented { display: inline-flex; padding: 3px; border-radius: 8px; background: var(--surface-2); }
 .segmented button { height: 34px; padding: 0 14px; border-radius: 6px; color: var(--text-3); font-weight: 600; font-size: .9rem; }
 .segmented button.is-active { background: #fff; color: #0b0b0d; }
 .form-error { color: var(--danger); font-size: .88rem; }
+.plugin-dialog { width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; border: 1px solid var(--hairline-strong); border-radius: var(--radius-l); background: var(--surface-1); color: var(--text); }
+.plugin-dialog::backdrop { background: #000b; }
+.plugin-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; }
+.plugin-dialog h2 { font-size: 1.1rem; }
+.plugin-dialog > p { padding: 16px; }
+.plugin-dialog iframe { display: block; width: 100%; height: min(500px, 65dvh); border: 0; }
+.plugin-row { flex-wrap: wrap; }
+.plugin-row > div:first-child { flex: 1 1 220px; }
+.plugin-actions, .plugin-row > .plugin-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.plugin-preview, .plugin-empty { padding: 18px 22px; overflow-wrap: anywhere; }
+.plugin-preview p { margin: 8px 0; color: var(--text-3); font-size: .85rem; }
+input[type=checkbox] { appearance: none; display: inline-grid; place-content: center; flex: none; width: 18px; height: 18px; margin: 0; padding: 0; vertical-align: -3px; border: 1px solid var(--hairline-strong); border-radius: 5px; background: var(--surface-2); cursor: pointer; }
+input[type=checkbox]:checked { background: var(--accent); border-color: var(--accent); }
+input[type=checkbox]:checked::before { content: ''; width: 8px; height: 4px; border: solid var(--accent-ink); border-width: 0 0 2px 2px; transform: translateY(-1px) rotate(-45deg); }
+input[type=checkbox]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+input[type=checkbox]:disabled { opacity: .45; cursor: default; }
 .switch { position: relative; flex: none; width: 46px; height: 28px; border-radius: 14px; background: var(--surface-3); transition: background-color .2s; }
 .switch i { position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; transition: transform .2s var(--ease); box-shadow: 0 1px 3px rgba(0, 0, 0, .4); }
 .switch.is-on { background: var(--accent); }
