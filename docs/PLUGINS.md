@@ -36,11 +36,14 @@ Use exactly one of `script` or `html`. All other fields except `actions` are req
 | `placements: ["player"]` | JavaScript runs while a video is open. Actions and tools appear under Playback settings → Plugins. |
 | `placements: ["app"]` | JavaScript runs across regular application pages outside the player. Actions and tools appear on the Plugins page. |
 | `placements: ["settings"]` | Compatibility alias for `app`. Existing packages continue to work. |
+| `placements: ["home"]` | Displays the plugin inline on Home (`/` and `/tabs/home`), for both JavaScript and HTML packages. It is removed when leaving Home. |
 | `placements: ["player", "app"]` | Both scopes. A new instance starts when moving between them. |
 | `actions` | Optional JavaScript-only buttons, each with a unique `id` and readable `label`. IDs start with a lowercase letter and contain up to 40 lowercase letters, digits, or hyphens. |
 | `connect` | Exact HTTPS origins the plugin may request through `moa.fetch`. |
 
 A script instance survives page changes within its scope and opening and closing its tool dialog or playback settings. It is destroyed when leaving its scope, changing profile or episode, updating the package, or observing disable/deletion. Timers and event listeners inside the iframe disappear with it. Persist durable data through `moa.storage`.
+
+Combining `home` with `app` or `settings` uses one inline instance on Home and a new application instance elsewhere. Home plugins do not appear on category tabs or the local library.
 
 ## Events and SDK
 
@@ -50,8 +53,9 @@ MOA supplies `window.moa` before plugin code runs. SDK methods return promises a
 | --- | --- | --- |
 | `moa.app.context()` | `app.context` | Current `{ pathname, search, hash }` inside MOA |
 | `moa.app.navigate(path)` | `app.navigate` | Opens a root-relative MOA page such as `/search?q=example`, `/title/id`, or `/watch/episodeId`; external addresses are rejected |
-| `moa.ui.open()` | `ui` | Shows the plugin iframe as a dialog; build its contents using normal JavaScript DOM APIs |
-| `moa.ui.close()` | `ui` | Closes the dialog; a JavaScript instance and its DOM stay alive in its scope |
+| `moa.ui.open()` | `ui` | Shows the plugin dialog or its inline Home panel; build its contents using normal JavaScript DOM APIs |
+| `moa.ui.close()` | `ui` | Hides the Home panel or closes the dialog; a JavaScript instance and its DOM stay alive in its scope |
+| `moa.ui.resize(height)` | `ui` | Sets an inline Home panel's height in CSS pixels, rounded up and clamped to 120–1200; rejects non-finite values and calls outside Home |
 | `moa.context()` | `player.context` | `{ episodeId, title, currentTime }`, or `null` outside the player |
 | `moa.player.play()` | `player.control` | Starts playback; browser autoplay restrictions may still reject it |
 | `moa.player.pause()` | `player.control` | Pauses playback |
@@ -93,6 +97,17 @@ moa.on('routechange', async page => {
 ```
 
 The `examples/page-notes` template stores notes for each visited page and includes a MOA search form. It uses the same sandbox and permissions as every other plugin. A script can combine these operations with its own timers, calculations, downloaded data, and custom UI. The host DOM and unrestricted server APIs remain outside the plugin boundary.
+
+### Display a Home panel
+
+Declare `placements: ["home"]` to display content above the regular Home rows. Each plugin gets an isolated iframe with a default height of 320 pixels. The plugin supplies its own heading and responsive layout; include the `ui` permission to adjust the frame height. Use internal scrolling for content taller than 1200 pixels.
+
+```js
+document.body.innerHTML = '<h2>Weekly picks</h2><p>Choose a title to search MOA.</p>';
+moa.on('ready', () => moa.ui.resize(160));
+```
+
+The [anime schedule plugin](../plugins/anime-schedule/README.md) provides Monday–Sunday tabs with Anissia's Korean-time schedule and opens MOA search for the selected title. It uses `moa.fetch`, `moa.app.navigate`, and `moa.ui.resize` without access to the host DOM.
 
 ### Save and restore a position
 
@@ -159,7 +174,7 @@ An HTML package needs the `subtitles.import` permission:
 
 ## Isolation and limits
 
-Both script and HTML packages execute in sandboxed browser iframes with same-origin access disabled. Scripts use a hidden iframe until a tool dialog opens, so an interface is optional. Closing a script dialog hides its iframe without rerunning the script; closing an HTML tool destroys that instance. They cannot access MOA's DOM, cookies, local storage, or JavaScript state. Each instance uses a dedicated message channel. A restrictive Content Security Policy blocks direct fetches, external scripts, forms, and nested frames. Use the SDK for supported operations. This boundary does not prevent malicious code from exhausting browser resources or navigating its own frame.
+Both script and HTML packages execute in sandboxed browser iframes with same-origin access disabled. Outside Home panels, scripts use a hidden iframe until a tool dialog opens, so an interface is optional. Closing a script dialog hides its iframe without rerunning the script; closing an HTML tool destroys that instance. They cannot access MOA's DOM, cookies, local storage, or JavaScript state. Each instance uses a dedicated message channel. A restrictive Content Security Policy blocks direct fetches, external scripts, forms, and nested frames. Use the SDK for supported operations. This boundary does not prevent malicious code from exhausting browser resources or navigating its own frame.
 
 | Resource | Limit |
 | --- | --- |

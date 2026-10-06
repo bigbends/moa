@@ -1,10 +1,10 @@
 import { Puzzle, Upload, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useMatch, useNavigate } from 'react-router-dom';
 import type { WebsitePlugin, WebsitePluginPackage } from '@moa/shared';
 import { api, ApiError, currentProfileId } from '../lib/api';
-import { Button, ConfirmDialog, IconButton } from './ui';
+import { Button, ButtonLink, ConfirmDialog, IconButton } from './ui';
 
 const usePlugins = () => useQuery({ queryKey: ['website-plugins'], queryFn: () => api<WebsitePlugin[]>('/plugins'), retry: false, refetchInterval: 30000 });
 const path = (id: string) => `/plugins/${encodeURIComponent(id)}`;
@@ -49,7 +49,7 @@ const sdk = `
     },
     context: () => call('player.context'),
     app: Object.freeze({ context: () => call('app.context'), navigate: path => call('app.navigate', path) }),
-    ui: Object.freeze({ open: () => call('ui', true), close: () => call('ui', false) }),
+    ui: Object.freeze({ open: () => call('ui', true), close: () => call('ui', false), resize: height => call('ui.resize', height) }),
     player: Object.freeze({ play: () => call('player.control', { action: 'play' }), pause: () => call('player.control', { action: 'pause' }), seek: seconds => call('player.control', { action: 'seek', seconds }) }),
     storage: Object.freeze({ get: () => call('storage'), set: value => call('storage', value) }),
     notify: text => call('notifications', text),
@@ -64,7 +64,7 @@ const sdk = `
   });
 })();`;
 
-function PluginWindow({ plugin, player, onClose }: { plugin: WebsitePlugin; player?: Player; onClose?: () => void }) {
+function PluginWindow({ plugin, player, inline = false, onClose }: { plugin: WebsitePlugin; player?: Player; inline?: boolean; onClose?: () => void }) {
   const location = useLocation(), navigate = useNavigate();
   const page = useRef(location); page.current = location;
   const content = useQuery({ queryKey: ['website-plugin', plugin.id, plugin.revision], queryFn: () => api<WebsitePluginPackage & { revision: string }>(path(plugin.id)), staleTime: 0, retry: false });
@@ -73,7 +73,8 @@ function PluginWindow({ plugin, player, onClose }: { plugin: WebsitePlugin; play
   const granted = useRef(available); granted.current = available;
   const dialog = useRef<HTMLDialogElement>(null), port = useRef<MessagePort | null>(null);
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [dismissed, setDismissed] = useState(false);
-  const [uiOpen, setUiOpen] = useState(plugin.kind === 'html');
+  const [uiOpen, setUiOpen] = useState(inline || plugin.kind === 'html');
+  const [height, setHeight] = useState(320);
   const active = useRef(true);
   const session = useRef(currentProfileId());
   const current = useRef(player); current.current = player;
@@ -124,6 +125,9 @@ function PluginWindow({ plugin, player, onClose }: { plugin: WebsitePlugin; play
           if (typeof data.value !== 'boolean') throw new Error('화면 요청을 확인해 주세요.');
           setUiOpen(data.value);
           if (!data.value) onClose?.();
+        } else if (data.method === 'ui.resize' && installed.permissions.includes('ui')) {
+          if (!inline || typeof data.value !== 'number' || !Number.isFinite(data.value)) throw new Error('홈 화면 높이를 확인해 주세요.');
+          setHeight(Math.max(120, Math.min(1200, Math.ceil(data.value))));
         } else if (data.method === 'player.context' && installed.permissions.includes('player.context')) {
           result = context();
         } else if (data.method === 'player.control' && installed.permissions.includes('player.control')) {
@@ -156,6 +160,10 @@ function PluginWindow({ plugin, player, onClose }: { plugin: WebsitePlugin; play
   const failure = error || (content.isError || !installedPlugins.isPending && !available || content.data && content.data.revision !== plugin.revision ? '플러그인을 불러오지 못했어요. 다시 열어 주세요.' : '');
   useEffect(() => { setDismissed(false); }, [failure]);
   const close = () => { setUiOpen(false); onClose?.(); };
+  if (inline) return <section className="home-plugin" aria-label={plugin.name} hidden={!uiOpen} style={{ '--plugin-height': `${height}px` } as CSSProperties}>
+    {content.isPending && <p role="status">플러그인을 불러오는 중…</p>}
+    {failure && <p role="alert">{failure}</p>}{notice && <p role="status">{notice}</p>}{frame}
+  </section>;
   return <><dialog ref={dialog} className="plugin-dialog" onCancel={event => { event.preventDefault(); close(); }}>
     <header><h2>{plugin.name}</h2><IconButton label="플러그인 닫기" onClick={close}><X size={20} /></IconButton></header>
     {content.isPending && <p>플러그인을 여는 중…</p>}
@@ -165,7 +173,14 @@ function PluginWindow({ plugin, player, onClose }: { plugin: WebsitePlugin; play
 
 export function PluginScripts({ player }: { player?: Player }) {
   const plugins = usePlugins();
-  return <>{plugins.data?.filter(plugin => plugin.enabled && plugin.kind === 'script' && (player ? plugin.placements.includes('player') : plugin.placements.some(place => place === 'app' || place === 'settings'))).map(plugin => <PluginWindow key={`${plugin.id}:${plugin.revision}:${currentProfileId()}:${player?.episodeId || ''}`} plugin={plugin} player={player} />)}</>;
+  const location = useLocation();
+  const home = useMatch('/tabs/:tabId')?.params.tabId === 'home' || location.pathname === '/';
+  return <>{plugins.data?.filter(plugin => plugin.enabled && plugin.kind === 'script' && (player ? plugin.placements.includes('player') : !(home && plugin.placements.includes('home')) && plugin.placements.some(place => place === 'app' || place === 'settings'))).map(plugin => <PluginWindow key={`${plugin.id}:${plugin.revision}:${currentProfileId()}:${player?.episodeId || ''}`} plugin={plugin} player={player} />)}</>;
+}
+
+export function HomePlugins() {
+  const plugins = usePlugins();
+  return <>{plugins.data?.filter(plugin => plugin.enabled && plugin.placements.includes('home')).map(plugin => <PluginWindow key={`${plugin.id}:${plugin.revision}:${currentProfileId()}`} plugin={plugin} inline />)}</>;
 }
 
 export function PluginShortcuts({ onSelect }: { onSelect: () => void }) {
@@ -208,11 +223,12 @@ export function WebsitePlugins({ admin }: { admin: boolean }) {
     }
     finally { setBusy(false); }
   };
-  const shown = plugins.data?.filter(plugin => admin || plugin.placements.some(place => place === 'app' || place === 'settings')) ?? [];
+  const shown = plugins.data?.filter(plugin => admin || plugin.placements.some(place => place === 'app' || place === 'settings' || place === 'home')) ?? [];
   return <section className="settings-group" id="plugins"><h2>웹사이트 플러그인</h2><div className="settings-card">
     {admin && <div className="setting"><div><b>플러그인 설치</b><small>ZIP 파일이나 플러그인 폴더 전체를 선택하고 요청 권한을 확인해 주세요.</small></div><div className="plugin-actions"><Button icon={<Upload size={16} />} disabled={busy} onClick={() => input.current?.click()}>ZIP 파일 선택</Button><Button disabled={busy} onClick={() => folder.current?.click()}>폴더 선택</Button></div><input ref={input} type="file" accept=".zip,.moa-plugin.json" hidden aria-label="플러그인 파일" onChange={event => { void choose(Array.from(event.target.files || [])); event.target.value = ''; }} /><input ref={folder} type="file" {...{ webkitdirectory: '' }} multiple hidden aria-label="플러그인 폴더" onChange={event => { void choose(Array.from(event.target.files || [])); event.target.value = ''; }} /></div>}
     {draft && <div className="plugin-preview"><b>{draft.name} · {draft.version}</b><p>{draft.description}</p>{draft.script !== undefined && <p>이 JavaScript 플러그인은 지정된 페이지에서 자동 실행됩니다.</p>}<p>권한: {draft.permissions.map(p => permissionLabels[p]).join(', ') || '없음'}</p><p>외부 연결: {draft.connect.join(', ') || '없음'}</p><div className="plugin-actions"><Button disabled={busy} variant="primary" onClick={() => void run(async () => { await api('/admin/plugins', { method: 'POST', body: { ...draft } }); setDraft(null); })}>설치·업데이트</Button><Button disabled={busy} onClick={() => { setDraft(null); setError(''); }}>취소</Button></div></div>}
     {shown.map(plugin => <div className="setting plugin-row" key={plugin.id}><div><b>{plugin.name} <small>{plugin.version}</small></b><small>{plugin.description}</small></div><div className="plugin-actions">
+      {plugin.enabled && plugin.placements.includes('home') && <ButtonLink to="/">홈에서 보기</ButtonLink>}
       {plugin.enabled && plugin.permissions.includes('ui') && plugin.kind === 'script' && plugin.placements.some(place => place === 'app' || place === 'settings') && <Button onClick={() => act(plugin.id)}>열기</Button>}
       {plugin.enabled && plugin.placements.some(place => place === 'app' || place === 'settings') && (plugin.kind === 'script' ? plugin.actions?.map(action => <Button key={action.id} onClick={() => act(plugin.id, action.id)}>{action.label}</Button>) : <Button onClick={() => setOpened(plugin)}>열기</Button>)}
       {admin && <><button role="switch" aria-label={`${plugin.name} 사용`} aria-checked={plugin.enabled} className={`switch ${plugin.enabled ? 'is-on' : ''}`} disabled={busy} onClick={() => void run(() => api(`/admin${path(plugin.id)}`, { method: 'PATCH', body: { enabled: !plugin.enabled } }))}><i /></button><Button disabled={busy} onClick={() => { setError(''); setDeleting(plugin); }}>삭제</Button></>}

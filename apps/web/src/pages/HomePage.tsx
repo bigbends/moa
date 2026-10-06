@@ -9,6 +9,7 @@ import { PosterCard } from "../components/Cards";
 import { Button, ButtonLink, EmptyState } from "../components/ui";
 import { TYPE_LABEL, cx } from "../lib/format";
 import { useNavigation, tabPath } from "../lib/navigation";
+import { HomePlugins } from '../components/WebsitePlugins';
 
 export function HomePage({ localOnly = false }: { localOnly?: boolean }) {
   const admin = useMe().data?.role === "admin";
@@ -32,6 +33,7 @@ export function HomePage({ localOnly = false }: { localOnly?: boolean }) {
     </div>
     {heroPending ? <HeroSkeleton /> : <Hero key={tab?.id} items={hero} />}
     <div className={cx('rows', !heroPending && !hero.length && 'rows-no-hero')}>
+      {!localOnly && tabId === 'home' && <HomePlugins />}
       {pending ? <><RowSkeleton /><RowSkeleton /></> : !tab ? <EmptyState title="삭제되었거나 없는 탭입니다" action={<ButtonLink to="/">홈으로</ButtonLink>} /> : <>
         {error && <EmptyState title="구성을 불러오지 못했습니다" action={<Button onClick={() => location.reload()}>다시 시도</Button>} />}
         {!providers.length && !rows.length && !home.isPending && !error && <EmptyState icon={<Settings2 size={40} />} title="이 탭에 표시할 소스가 없어요" body="영상 소스나 로컬 라이브러리를 이 탭에 연결해 주세요." action={<ButtonLink variant="primary" to={`/settings/tabs?edit=${encodeURIComponent(tab.id)}`}>탭 편집</ButtonLink>} />}

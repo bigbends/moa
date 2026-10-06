@@ -399,6 +399,9 @@
 .plugin-dialog h2 { font-size: 1.1rem; }
 .plugin-dialog > p { padding: 16px; }
 .plugin-dialog iframe { display: block; width: 100%; height: min(500px, 65dvh); border: 0; }
+.home-plugin { margin: clamp(22px, 3vw, 38px) var(--gutter); }
+.home-plugin iframe { display: block; width: 100%; height: var(--plugin-height, 320px); border: 0; }
+.home-plugin > p { padding: 12px 0; color: var(--text-3); }
 .plugin-row { flex-wrap: wrap; }
 .plugin-row > div:first-child { flex: 1 1 220px; }
 .plugin-actions, .plugin-row > .plugin-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }

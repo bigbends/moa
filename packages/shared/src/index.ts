@@ -209,7 +209,7 @@ export interface WebsitePlugin {
   name: string;
   version: string;
   description: string;
-  placements: Array<'app' | 'settings' | 'player'>;
+  placements: Array<'app' | 'settings' | 'player' | 'home'>;
   permissions: Array<'app.context' | 'app.navigate' | 'ui' | 'player.context' | 'player.control' | 'subtitles.import' | 'storage' | 'notifications'>;
   kind: 'html' | 'script';
   actions?: Array<{ id: string; label: string }>;
