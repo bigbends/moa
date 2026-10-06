@@ -22,7 +22,7 @@ test('host source network is isolated, defaults off, preserves reinstall, and sc
   class Browser extends SourceBrowser {
     constructor(){ super({}); }
     override get configured(){ return true; }
-    override async evaluate(scope:string,proxy:string|undefined,input:any){ browserCalls.push({scope,proxy,url:input.url,headers:input.headers}); return Buffer.from('browser-image').toString('base64'); }
+    override async evaluate(scope:string,proxy:string|undefined,input:any){ const urls=JSON.parse(input.script.match(/Promise\.all\((\[.*?\])\.map/)[1]); browserCalls.push({scope,proxy,url:input.url,headers:input.headers,urls}); return urls.map((u:string)=>u.endsWith('missing.png')?null:Buffer.from('browser:'+u.split('/').at(-1)).toString('base64')); }
   }
   const browserCalls:any[]=[];
   const sources = new Sources(db,catalog,async input=>{
@@ -74,8 +74,10 @@ test('host source network is isolated, defaults off, preserves reinstall, and sc
   }
   const denied=async()=>({bytes:Buffer.from('challenge'),headers:{},statusCode:403,contentType:'text/html'});
   const aImage=a.items[0].poster!.split('/').at(-1)!,bImage=b.items[0].poster!.split('/').at(-1)!;
-  assert.equal((await sources.imageContent(aImage,denied)).toString(),'browser-image','browser-enabled sources retry blocked images in their session');
-  assert.deepEqual(browserCalls,[{scope:'a',proxy:ownProxy,url:'https://source.test/poster.png',headers:{Referer:'https://source.test/'}}]);
+  for(const name of ['second.png','missing.png'])db.run('INSERT INTO source_images VALUES(?,?,?)','extra-'+name,'https://source.test/'+name,'{"Referer":"https://source.test/"}'),db.run('INSERT INTO source_image_owners VALUES(?,?)','a','extra-'+name);
+  const burst=await Promise.allSettled([aImage,'extra-second.png',aImage,'extra-missing.png'].map(id=>sources.imageContent(id,denied)));
+  assert.deepEqual(burst.map(r=>r.status==='fulfilled'?r.value.toString():(r.reason as Error).message),['browser:poster.png','browser:second.png','browser:poster.png','image-unavailable'],'browser-enabled sources retry blocked images in their session');
+  assert.deepEqual(browserCalls,[{scope:'a',proxy:ownProxy,url:'https://source.test/poster.png',headers:{Referer:'https://source.test/'},urls:['https://source.test/poster.png','https://source.test/second.png','https://source.test/missing.png']}],'a burst of blocked images is one deduplicated browser page');
   await assert.rejects(sources.imageContent(bImage,denied),{message:'image-unavailable'});
   assert.equal(browserCalls.length,1,'sources without the browser option keep plain image failures');
   await sources.detail(a.items[0].id);

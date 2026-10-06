@@ -15,6 +15,7 @@ import { ApiFailure, now } from './util.js';
 const key = (...parts: string[]) => createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 40);
 const text = (value: unknown, max = 500) => typeof value === 'string' ? value.slice(0, max) : '';
 const webUrl = (value: unknown, base: string) => { try { if (!text(value, 8192)) return undefined; const u = new URL(text(value, 8192), base || undefined); return /^https?:$/.test(u.protocol) && !u.username && !u.password ? u.href : undefined; } catch { return undefined; } };
+type ImageBatch = { urls: Map<string,((bytes?: Buffer) => void)[]>; timer?: NodeJS.Timeout };
 const hostPreference = (key: string) => key === '__moa_proxy' || key === '__moa_browser';
 const guestPreferences = (values: Record<string, unknown>) => Object.fromEntries(Object.entries(values).filter(([key]) => !hostPreference(key))) as PreferenceValues;
 export class Sources {
@@ -378,16 +379,39 @@ export class Sources {
     // Sites behind a browser challenge reject plain image requests; reuse the owner's browser session.
     const owner = owners.find(o => this.db.get('SELECT browser FROM source_network WHERE source_id=?',o.source_id)?.browser);
     if (owner && this.browser.configured) {
-      const bytes = await this.browserImage(owner.source_id,proxy,row.url,headers).catch(() => undefined);
+      const bytes = await this.browserImage(owner.source_id,proxy,row.url,headers);
       if (bytes) return bytes;
     }
     throw new ApiFailure(502,'image-unavailable');
   }
-  private async browserImage(sourceId: string, proxy: string | undefined, url: string, headers: Record<string,string>) {
-    const script = `(async()=>{const r=await fetch(location.href,{credentials:'include'});const t=r.headers.get('content-type')||'';if(!r.ok||!t.startsWith('image/'))return null;const b=new Uint8Array(await r.arrayBuffer());if(b.length>3145728)return null;let s='';for(let i=0;i<b.length;i+=32768)s+=String.fromCharCode.apply(null,b.subarray(i,i+32768));return btoa(s);})()`;
-    const data = await this.browser.evaluate(sourceId,proxy,{url,headers,script,waitUntil:'load',timeoutMs:45_000},this.abort.signal);
-    if (typeof data !== 'string' || !data || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return undefined;
-    return Buffer.from(data,'base64');
+  private imageBatches = new Map<string,ImageBatch>();
+  private browserImage(sourceId: string, proxy: string | undefined, url: string, headers: Record<string,string>) {
+    let origin: string;
+    try { origin = new URL(url).origin; } catch { return Promise.resolve(undefined); }
+    // Posters arrive in bursts; collect them per session and origin so one page fetches them in parallel.
+    const key = JSON.stringify([sourceId,proxy||'',origin,headers]);
+    let batch = this.imageBatches.get(key);
+    if (!batch) {
+      const created: ImageBatch = { urls: new Map() };
+      created.timer = setTimeout(() => void this.flushImages(key,created,sourceId,proxy,headers), 50);
+      this.imageBatches.set(key,batch = created);
+    }
+    const target = batch;
+    const done = new Promise<Buffer | undefined>(resolve => target.urls.set(url,[...(target.urls.get(url) || []),resolve]));
+    if (target.urls.size >= 24) { clearTimeout(target.timer); void this.flushImages(key,target,sourceId,proxy,headers); }
+    return done;
+  }
+  private async flushImages(key: string, batch: ImageBatch, sourceId: string, proxy: string | undefined, headers: Record<string,string>) {
+    if (this.imageBatches.get(key) === batch) this.imageBatches.delete(key);
+    const urls = [...batch.urls.keys()];
+    const script = `(async()=>{let budget=2900000;return Promise.all(${JSON.stringify(urls)}.map(async u=>{try{const r=await fetch(u,{credentials:'include'});const t=r.headers.get('content-type')||'';if(!r.ok||!t.startsWith('image/'))return null;const b=new Uint8Array(await r.arrayBuffer());if(b.length>budget)return null;budget-=b.length;let s='';for(let i=0;i<b.length;i+=32768)s+=String.fromCharCode.apply(null,b.subarray(i,i+32768));return btoa(s);}catch{return null}}));})()`;
+    let data: unknown;
+    try { data = await this.browser.evaluate(sourceId,proxy,{url:urls[0],headers,script,waitUntil:'load',timeoutMs:45_000},this.abort.signal); } catch {}
+    urls.forEach((url,index) => {
+      const value = Array.isArray(data) ? data[index] : undefined;
+      const bytes = typeof value === 'string' && value && /^[A-Za-z0-9+/]+={0,2}$/.test(value) ? Buffer.from(value,'base64') : undefined;
+      for (const resolve of batch.urls.get(url)!) resolve(bytes);
+    });
   }
   private putItem(sourceId: string, item: SourceItem) {
     const r = this.row(sourceId), entry: MangayomiEntry = JSON.parse(r.installed_entry);
