@@ -96,7 +96,8 @@ version](https://packages.ubuntu.com/resolute/libnss3)), with Node 22 copied fro
 the official Node image. The Linux amd64 Docker image build and Firefox startup have been verified.
 Runtime font manifests use `XDG_CACHE_HOME=/tmp/browser-cache` on tmpfs;
 the sealed engine remains at its explicit read-only `/opt/browser-cache` path.
-Site compatibility remains experimental.
+The container retains a bounded 512-task process/thread budget; real challenge
+pages exhausted the previous 192-task limit. Site compatibility remains experimental.
 
 The launcher uses explicit `ko-KR` / `Asia/Seoul` so startup performs no direct
 Python egress/geo probe. It disables WebRTC, DoH and prefetch/speculative
