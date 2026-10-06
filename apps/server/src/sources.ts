@@ -372,9 +372,22 @@ export class Sources {
     if (!owners.length) throw new ApiFailure(404,'image-not-found');
     const proxies = new Set(owners.map(owner=>this.proxy(owner.source_id)));
     if (proxies.size !== 1) throw new ApiFailure(502,'image-proxy-conflict');
-    const result = await transport({url:row.url,headers:JSON.parse(row.headers)},this.abort.signal,[],8*1024*1024,this.proxy(owners[0].source_id));
-    if (result.statusCode !== 200) throw new ApiFailure(502,'image-unavailable');
-    return result.bytes;
+    const proxy = this.proxy(owners[0].source_id), headers = JSON.parse(row.headers);
+    const result = await transport({url:row.url,headers},this.abort.signal,[],8*1024*1024,proxy);
+    if (result.statusCode === 200) return result.bytes;
+    // Sites behind a browser challenge reject plain image requests; reuse the owner's browser session.
+    const owner = owners.find(o => this.db.get('SELECT browser FROM source_network WHERE source_id=?',o.source_id)?.browser);
+    if (owner && this.browser.configured) {
+      const bytes = await this.browserImage(owner.source_id,proxy,row.url,headers).catch(() => undefined);
+      if (bytes) return bytes;
+    }
+    throw new ApiFailure(502,'image-unavailable');
+  }
+  private async browserImage(sourceId: string, proxy: string | undefined, url: string, headers: Record<string,string>) {
+    const script = `(async()=>{const r=await fetch(location.href,{credentials:'include'});const t=r.headers.get('content-type')||'';if(!r.ok||!t.startsWith('image/'))return null;const b=new Uint8Array(await r.arrayBuffer());if(b.length>3145728)return null;let s='';for(let i=0;i<b.length;i+=32768)s+=String.fromCharCode.apply(null,b.subarray(i,i+32768));return btoa(s);})()`;
+    const data = await this.browser.evaluate(sourceId,proxy,{url,headers,script,waitUntil:'load',timeoutMs:45_000},this.abort.signal);
+    if (typeof data !== 'string' || !data || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return undefined;
+    return Buffer.from(data,'base64');
   }
   private putItem(sourceId: string, item: SourceItem) {
     const r = this.row(sourceId), entry: MangayomiEntry = JSON.parse(r.installed_entry);
