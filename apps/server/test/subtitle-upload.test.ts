@@ -27,6 +27,9 @@ test('imports subtitle formats and preserves ASS positions and VTT settings', as
 
 test('reads ZIP and 7z subtitle entries without extracting paths, rejects invalid and oversized archives', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'moa-upload-test-'));
+  const previousLocale = process.env.LC_ALL;
+  // Reproduce the Docker runtime's non-UTF-8 locale, even on a UTF-8 developer host.
+  if (process.platform === 'linux') process.env.LC_ALL = 'C';
   try {
     const filename = '[한글] 자막.srt';
     await writeFile(path.join(directory, filename), srt);
@@ -34,7 +37,10 @@ test('reads ZIP and 7z subtitle entries without extracting paths, rejects invali
     await writeFile(path.join(directory, 'ignore.txt'), 'not a subtitle');
     for (const [format, ext] of [['zip', 'zip'], ['7zip', '7z']]) {
       const archive = path.join(directory, `test.${ext}`);
-      execFileSync('bsdtar', ['-cf', archive, '--format', format, '-C', directory, filename, 'other.srt', 'ignore.txt']);
+      // Produce a valid Unicode archive independently of the reader's locale.
+      execFileSync('bsdtar', ['-cf', archive, '--format', format, '-C', directory, filename, 'other.srt', 'ignore.txt'], {
+        env: process.platform === 'linux' ? { ...process.env, LC_ALL: 'C.UTF-8' } : process.env,
+      });
       const subtitles = await importSubtitles(`test.${ext}`, (await readFile(archive)).toString('base64'));
       assert.deepEqual(subtitles.map(item => item.filename.normalize('NFC')).sort(), [filename, 'other.srt'].sort());
       assert.ok(subtitles.every(item => item.format === 'vtt'));
@@ -46,7 +52,10 @@ test('reads ZIP and 7z subtitle entries without extracting paths, rejects invali
     await writeFile(path.join(directory, 'large.srt'), 'x'.repeat(4 * 1024 * 1024 + 1));
     execFileSync('bsdtar', ['-cf', empty, '--format', 'zip', '-C', directory, 'large.srt']);
     await assert.rejects(importSubtitles('large.zip', (await readFile(empty)).toString('base64')));
-  } finally { await rm(directory, { recursive: true, force: true }); }
+  } finally {
+    if (previousLocale === undefined) delete process.env.LC_ALL; else process.env.LC_ALL = previousLocale;
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('subtitle import route requires a profile and validates the request', async () => {

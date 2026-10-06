@@ -41,6 +41,9 @@ let profiles: Profile[] = [
   { id: "p1", name: "코호", color: "violet", kids: false, createdAt: new Date().toISOString() },
   { id: "p2", name: "가족", color: "teal", kids: false, createdAt: new Date().toISOString() }
 ];
+// Development-only PIN state, reset on reload; never return PINs in profile JSON.
+const profilePins = new Map<string, string>();
+let unlockedProfile: string | null = null;
 let settings: Settings = { autoplayNext: true, autoplayDelay: 5, defaultSubtitleLang: "ko", subtitleSize: "medium", preferredQuality: "auto", hardwareTranscoding: true, autoFetchSubtitles: true, translationMode: "manual", translationSourcePriority: "site", skipSubtitleSearchWithSiteTrack: true, skipTranslationWithoutSubtitles: true, experimentalSubtitleSync: true };
 
 function detail(id: string): MediaDetail | null {
@@ -268,7 +271,44 @@ export function installMockApi() {
     if (path === "/health") return json({ ok: true, version: "mock" });
     if (path === "/admin/updates") return json({ configured: false, connected: false, state: 'idle', mode: null, current: 'unknown', latest: null, branch: null, behind: 0, ahead: 0, checkedAt: null, error: null });
     if (path === "/profiles" && method === "GET") return json(profiles);
-    if (path === "/profiles" && method === "POST") { const p = { id: `p${Date.now()}`, name: body.name, color: body.color ?? "blue", kids: Boolean(body.kids), createdAt: new Date().toISOString() }; profiles = [...profiles, p]; return json(p); }
+    if (path === "/profiles/lock" && method === "POST") { unlockedProfile = null; return json(null, 204); }
+    const unlock = /^\/profiles\/([^/]+)\/unlock$/.exec(path);
+    if (unlock && method === "POST") {
+      const id = decodeURIComponent(unlock[1]);
+      if (!profiles.some(p => p.id === id)) return json({ error: 'profile-not-found' }, 404);
+      if (typeof body.pin !== 'string' || !/^[0-9]{4,8}$/.test(body.pin)) return json({ error: 'invalid-request' }, 400);
+      if (profilePins.has(id) && profilePins.get(id) !== body.pin) return json({ error: 'profile-pin-invalid' }, 401);
+      unlockedProfile = id;
+      return json(null, 204);
+    }
+    if (path === "/profiles" && method === "POST") {
+      if (profiles.length >= 5) return json({ error: 'profile-limit' }, 409);
+      if (typeof body.name !== 'string' || !body.name.trim() || (body.pin != null && (typeof body.pin !== 'string' || !/^[0-9]{4,8}$/.test(body.pin)))) return json({ error: 'invalid-request' }, 400);
+      const p: Profile = { id: crypto.randomUUID(), name: body.name.trim(), color: body.color ?? "blue", kids: Boolean(body.kids), avatar: body.avatar ?? null, hasPin: Boolean(body.pin), createdAt: new Date().toISOString() };
+      if (body.pin) { profilePins.set(p.id, body.pin); unlockedProfile = p.id; }
+      profiles = [...profiles, p]; return json(p, 201);
+    }
+    const profilePath = /^\/profiles\/([^/]+)$/.exec(path);
+    if (profilePath && (method === 'PATCH' || method === 'DELETE')) {
+      const id = decodeURIComponent(profilePath[1]), p = profiles.find(p => p.id === id);
+      if (!p) return json({ error: 'profile-not-found' }, 404);
+      if (profilePins.has(id) && unlockedProfile !== id) return json({ error: 'profile-locked' }, 401);
+      if (method === 'DELETE') {
+        profiles = profiles.filter(p => p.id !== id); profilePins.delete(id);
+        if (unlockedProfile === id) unlockedProfile = null;
+        return json(null, 204);
+      }
+      if ((body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim())) || (body.pin != null && (typeof body.pin !== 'string' || !/^[0-9]{4,8}$/.test(body.pin)))) return json({ error: 'invalid-request' }, 400);
+      if (body.pin !== undefined) {
+        if (body.pin === null) profilePins.delete(id); else profilePins.set(id, body.pin);
+        unlockedProfile = id;
+      }
+      const updated = { ...p, name: body.name?.trim() ?? p.name, color: body.color ?? p.color, kids: body.kids === undefined ? p.kids : Boolean(body.kids), avatar: body.avatar === undefined ? p.avatar : body.avatar, hasPin: profilePins.has(id) };
+      profiles = profiles.map(p => p.id === id ? updated : p);
+      return json(updated);
+    }
+    const selectedProfile = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('X-Moa-Profile');
+    if (selectedProfile && profilePins.has(selectedProfile) && unlockedProfile !== selectedProfile) return json({ error: 'profile-locked' }, 401);
     if (path === "/home") return json(home(url.searchParams.get("type") ?? undefined));
     if (path.startsWith("/media/")) { const d = detail(decodeURIComponent(path.slice(7))); return d ? json(d) : json({ error: "not-found" }, 404); }
     if (path === "/media") { const type = url.searchParams.get("type"); const items = cards.filter(card => !type || card.type === type); return json({ items, page: 1, hasNextPage: false, total: items.length }); }

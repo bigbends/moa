@@ -26,7 +26,10 @@ export async function importSubtitles(filename: string, data: string) {
   try {
     const archive = path.join(directory, 'archive');
     await writeFile(archive, input);
-    const options = { encoding: 'buffer' as const, timeout: 5000, signal: AbortSignal.timeout(15000), maxBuffer: MAX_SUBTITLE };
+    // Debian's default C locale escapes non-ASCII names in listings and cannot
+    // decode 7z UTF-16 paths. Both listing and extraction must use UTF-8.
+    const env = process.platform === 'linux' ? { ...process.env, LC_ALL: 'C.UTF-8' } : process.env;
+    const options = { env, encoding: 'buffer' as const, timeout: 5000, signal: AbortSignal.timeout(15000), maxBuffer: MAX_SUBTITLE };
     const listing = await run('bsdtar', ['-tf', archive], { ...options, maxBuffer: 256 * 1024 });
     const names = listing.stdout.toString('utf8').split('\n').filter(Boolean);
     if (names.length > 300) throw new ApiFailure(413, 'subtitle-archive-too-large');

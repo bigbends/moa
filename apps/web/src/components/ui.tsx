@@ -56,6 +56,9 @@ export function ConfirmDialog({ title, children, confirmLabel = "확인", busy =
   </dialog>;
 }
 
+// Older TV browsers lack the Popover API; Select falls back to a native <select> there.
+const popoverSupported = typeof HTMLElement !== "undefined" && typeof HTMLElement.prototype.showPopover === "function" && typeof HTMLElement.prototype.hidePopover === "function";
+
 export function Select({ value, options, onChange, className, disabled, ...rest }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "value" | "onChange" | "children"> & { value: string; options: { value: string; label: string }[]; onChange: (value: string) => void }) {
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
@@ -65,7 +68,7 @@ export function Select({ value, options, onChange, className, disabled, ...rest 
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const selected = options.findIndex(option => option.value === value);
-  const close = () => { menu.current?.hidePopover(); setOpen(false); };
+  const close = () => { if (popoverSupported) menu.current?.hidePopover(); setOpen(false); };
   const show = () => {
     const button = trigger.current, list = menu.current;
     if (!button || !list || disabled || !options.length) return;
@@ -94,6 +97,15 @@ export function Select({ value, options, onChange, className, disabled, ...rest 
   }, [open]);
   useEffect(() => { if (open) menu.current?.children[active]?.scrollIntoView({ block: "nearest" }); }, [open, active]);
   useEffect(() => { if (disabled) close(); }, [disabled]);
+  if (!popoverSupported) {
+    return <span className={cx("dropdown", className)}>
+      <select id={rest.id} name={rest.name} title={rest.title} autoFocus={rest.autoFocus} tabIndex={rest.tabIndex} aria-label={rest["aria-label"]} aria-labelledby={rest["aria-labelledby"]} aria-describedby={rest["aria-describedby"]}
+        className="dropdown-trigger" disabled={disabled || !options.length} value={value} onChange={event => onChange(event.target.value)}>
+        {selected < 0 && <option value={value} hidden>{value}</option>}
+        {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+    </span>;
+  }
   return <span className={cx("dropdown", className)}>
     <button {...rest} ref={trigger} type="button" className="dropdown-trigger" disabled={disabled || !options.length} popoverTarget={id} role="combobox" aria-haspopup="listbox" aria-expanded={open} aria-controls={id} aria-activedescendant={open ? `${id}-${active}` : undefined}
       onClick={event => { event.preventDefault(); if (open) close(); else show(); }} onKeyDown={event => {

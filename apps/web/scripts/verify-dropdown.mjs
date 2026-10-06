@@ -10,6 +10,26 @@ const server = await createServer({ root: fileURLToPath(new URL('..', import.met
 await server.listen();
 const browser = await chromium.launch({ executablePath: process.env.MOA_BROWSER_EXECUTABLE });
 const errors = [];
+const defaultSettings = () => ({ autoplayNext: true, autoplayDelay: 5, preferredQuality: 'auto', defaultSubtitleLang: 'ko', subtitleSize: 'medium', translationMode: 'ask', translationSourcePriority: 'site-first', navigation: [{ id: 'home', name: '홈', sourceIds: [], includeLocal: true }] });
+const config = { enabled: true, configured: true, provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'long-custom-model-name-for-subtitle-translation', keys: [], batchSize: 50, requestIntervalMs: 1000, retryCount: 2 };
+let settings;
+const routeApi = context => context.route(url => url.pathname.startsWith('/api/') || url.pathname.startsWith('/__moa/api/'), route => {
+  const path = new URL(route.request().url()).pathname;
+  if (path === '/api/settings') {
+    if (route.request().method() === 'PATCH') settings = { ...settings, ...route.request().postDataJSON() };
+    return route.fulfill({ json: settings });
+  }
+  if (path === '/api/me') return route.fulfill({ json: { id: 'admin', username: '테스트', role: 'admin' } });
+  if (path === '/api/profiles') return route.fulfill({ json: [{ id: 'test', name: '테스트', color: 'blue' }] });
+  if (path.endsWith('/translation/config')) return route.fulfill({ json: config });
+  if (path === '/api/network') return route.fulfill({ json: { defaultProxy: '', revision: 0 } });
+  if (path === '/api/admin/tmdb/config') return route.fulfill({ json: { configured: false } });
+  if (path === '/api/admin/updates') return route.fulfill({ json: { configured: false, connected: false, current: 'unknown', state: 'idle' } });
+  if (path === '/api/admin/default-navigation') return route.fulfill({ json: { navigation: null } });
+  if (path === '/__moa/api/accounts') return route.fulfill({ json: [{ id: 'admin', username: '테스트', role: 'admin', lastLoginAt: new Date().toISOString() }] });
+  return route.fulfill({ json: [] });
+});
+const until = async (check, timeout = 5000) => { for (const end = Date.now() + timeout; !check(); await new Promise(resolve => setTimeout(resolve, 25))) if (Date.now() > end) throw new Error('Timed out waiting for API state'); };
 try {
   for (const width of [1280, 390, 320]) {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
@@ -17,24 +37,8 @@ try {
     const page = await context.newPage();
     page.on('pageerror', error => errors.push(String(error)));
     page.on('dialog', async dialog => { errors.push(`Unexpected browser dialog: ${dialog.type()}`); await dialog.dismiss(); });
-    let settings = { autoplayNext: true, autoplayDelay: 5, preferredQuality: 'auto', defaultSubtitleLang: 'ko', subtitleSize: 'medium', translationMode: 'ask', translationSourcePriority: 'site-first', navigation: [{ id: 'home', name: '홈', sourceIds: [], includeLocal: true }] };
-    const config = { enabled: true, configured: true, provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'long-custom-model-name-for-subtitle-translation', keys: [], batchSize: 50, requestIntervalMs: 1000, retryCount: 2 };
-    await context.route(url => url.pathname.startsWith('/api/') || url.pathname.startsWith('/__moa/api/'), route => {
-      const path = new URL(route.request().url()).pathname;
-      if (path === '/api/settings') {
-        if (route.request().method() === 'PATCH') settings = { ...settings, ...route.request().postDataJSON() };
-        return route.fulfill({ json: settings });
-      }
-      if (path === '/api/me') return route.fulfill({ json: { id: 'admin', username: '테스트', role: 'admin' } });
-      if (path === '/api/profiles') return route.fulfill({ json: [{ id: 'test', name: '테스트', color: 'blue' }] });
-      if (path.endsWith('/translation/config')) return route.fulfill({ json: config });
-      if (path === '/api/network') return route.fulfill({ json: { defaultProxy: '', revision: 0 } });
-      if (path === '/api/admin/tmdb/config') return route.fulfill({ json: { configured: false } });
-      if (path === '/api/admin/updates') return route.fulfill({ json: { configured: false, connected: false, current: 'unknown', state: 'idle' } });
-      if (path === '/api/admin/default-navigation') return route.fulfill({ json: { navigation: null } });
-      if (path === '/__moa/api/accounts') return route.fulfill({ json: [{ id: 'admin', username: '테스트', role: 'admin', lastLoginAt: new Date().toISOString() }] });
-      return route.fulfill({ json: [] });
-    });
+    settings = defaultSettings();
+    await routeApi(context);
     const base = server.resolvedUrls.local[0];
     await page.goto(`${base}settings`);
     const reset = page.locator('#tabs').getByRole('button', { name: '기본값', exact: true });
@@ -127,8 +131,48 @@ try {
     await page.screenshot({ path: verificationPath(`accounts-${width}.png`), fullPage: true });
     await context.close();
   }
+  {
+    // Regression: browsers without the Popover API must get a working native <select> instead of a TypeError.
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    await context.addInitScript(() => {
+      localStorage.setItem('moa.profile', 'test'); localStorage.setItem('moa.remoteMode', 'off');
+      delete HTMLElement.prototype.showPopover; delete HTMLElement.prototype.hidePopover; delete HTMLElement.prototype.togglePopover;
+    });
+    settings = defaultSettings();
+    await routeApi(context);
+    const page = await context.newPage();
+    page.on('pageerror', error => errors.push(`no-popover: ${error}`));
+    const base = server.resolvedUrls.local[0];
+    await page.goto(`${base}settings`);
+    const quality = page.getByRole('combobox', { name: 'preferredQuality', exact: true });
+    await quality.waitFor();
+    assert.equal(await page.evaluate(() => typeof HTMLElement.prototype.showPopover), 'undefined');
+    assert.equal(await quality.evaluate(element => element.tagName), 'SELECT');
+    assert.equal(await page.locator('.dropdown-menu').count(), 0);
+    assert.equal(await quality.inputValue(), 'auto');
+    await quality.selectOption({ label: '480p' });
+    await page.waitForFunction(() => document.querySelector('[aria-label="preferredQuality"]').value === '480');
+    await until(() => settings.preferredQuality === '480');
+    await quality.focus();
+    await quality.press('ArrowUp');
+    await page.waitForFunction(() => document.querySelector('[aria-label="preferredQuality"]').value !== '480');
+    const changed = await quality.inputValue();
+    await until(() => settings.preferredQuality === changed);
+    await page.evaluate(() => { localStorage.setItem('moa.remoteMode', 'on'); window.dispatchEvent(new Event('moa:remote-mode')); });
+    await quality.focus();
+    await quality.press('ArrowDown');
+    await page.waitForFunction(() => document.querySelector('[aria-label="preferredQuality"]').value === '480');
+    assert.equal(await quality.evaluate(element => element === document.activeElement), true);
+    assert.ok(page.url().endsWith('/settings'));
+    await page.goto(`${base}sources`);
+    const kind = page.getByRole('combobox', { name: '확장 저장소 형식', exact: true });
+    await kind.selectOption('aniyomi-apk');
+    assert.equal(await kind.inputValue(), 'aniyomi-apk');
+    await page.screenshot({ path: verificationPath('dropdown-native-fallback.png') });
+    await context.close();
+  }
   assert.deepEqual(errors, []);
-  console.log('Dropdown keyboard, pointer, viewport, source settings and account layout checks passed.');
+  console.log('Dropdown keyboard, pointer, viewport, source settings and account layout checks passed, including the native fallback without the Popover API.');
 } finally {
   await browser.close();
   await server.close();
