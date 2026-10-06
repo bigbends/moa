@@ -25,6 +25,8 @@ services:
     tmpfs: ["/tmp:rw,size=256m,uid=1000,gid=1000"]
     environment:
       HOME: /tmp
+      # Runtime font manifests must be writable; the sealed engine stays in /opt.
+      XDG_CACHE_HOME: /tmp/browser-cache
       MOA_SOURCE_BROWSER_SECRET_FILE: /run/moa-source-browser/token
       MOA_SOURCE_BROWSER_GENERATE_SECRET: "1"
     volumes:
