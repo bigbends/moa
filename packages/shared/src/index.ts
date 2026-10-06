@@ -401,6 +401,7 @@ export interface VideoSource {
 }
 export interface SourcePreference {
   key: string; title: string; summary?: string; kind: "text" | "boolean" | "select" | "multi-select";
+  disabled?: boolean;
   secret: boolean; configured?: boolean; value?: string | boolean | number | string[];
   choices?: readonly { label: string; value: string | number }[];
 }

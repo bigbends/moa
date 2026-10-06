@@ -106,7 +106,7 @@ export class RemotePlayback {
     const ep = detail.seasons.flatMap(s => s.episodes).find(e => e.id === episodeId)!;
     const episodes = detail.seasons.flatMap(s => s.episodes), next = episodes[episodes.indexOf(ep) + 1];
     const live = Boolean(source.live), id = token();
-    const state: RemoteSession = { apkLease: videos.apkLease, proxy: this.sources.proxy(), profile, touched: this.clock(), renewAt: this.clock()+45_000, assets: new Map(), reverse: new Map(), abort: new AbortController(), response: {} as PlaybackSession };
+    const state: RemoteSession = { apkLease: videos.apkLease, proxy: this.sources.proxy(mapping.source_id), profile, touched: this.clock(), renewAt: this.clock()+45_000, assets: new Map(), reverse: new Map(), abort: new AbortController(), response: {} as PlaybackSession };
     const headers = item.headers || {};
     const mime = item.url.startsWith('edl://') ? 'application/vnd.apple.mpegurl' : /\.mp4(?:\?|$)/i.test(item.url) ? 'video/mp4' : /\.webm(?:\?|$)/i.test(item.url) ? 'video/webm' : 'application/vnd.apple.mpegurl';
     let inlineBytes=0;

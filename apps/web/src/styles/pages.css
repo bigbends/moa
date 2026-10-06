@@ -356,6 +356,11 @@
 .source-settings { margin-top:20px; padding:20px; border-radius:12px; background:#ffffff05; }
 .source-preferences { display:grid; gap:20px; }
 .source-preferences .field small { color:#a1a1aa; line-height:1.6; white-space:pre-line; }
+.source-preferences input[type=checkbox], .source-toolbar input[type=checkbox] { width:18px; height:18px; padding:0; accent-color:var(--accent); }
+.source-preferences .field.is-disabled > label, .source-preferences input:disabled, .source-preferences select:disabled, .source-preferences .dropdown-trigger:disabled { opacity:.55; cursor:not-allowed; }
+.source-host-preferences { display:grid; gap:20px; padding-top:20px; border-top:1px solid #ffffff12; }
+.source-host-preferences h3 { margin:0 0 4px; font-size:15px; }
+.source-host-preferences h3 + p { margin:0; color:#a1a1aa; font-size:13px; line-height:1.6; }
 .source-choice { display:flex; align-items:center; gap:10px; margin:10px 0; }
 .source-toolbar { display:flex; gap:20px; align-items:center; margin-bottom:24px; flex-wrap:wrap; }
 .source-toolbar label { display:flex; gap:10px; align-items:center; }

@@ -184,8 +184,8 @@ test('language variants keep original metadata and isolate state without changin
   assert.equal(first.length,2);assert.equal(english.id,legacy);assert.notEqual(japanese.id,legacy);
   assert.equal(sources.row(legacy).code,'installed-code');assert.equal(JSON.parse(sources.row(legacy).preferences).token,'preserved');
   assert.equal(JSON.parse(sources.row(japanese.id,false).entry).id,'same');assert.equal(sources.row(japanese.id,false).enabled,0);
-  assert.match(english.iconUrl!,/^\/api\/images\/source-[a-f0-9]+$/);assert.equal(english.iconUrl,japanese.iconUrl);
-  const count=()=>db.get('SELECT count(*) AS n FROM source_images')!.n;assert.equal(count(),1);sources.list();sources.list();assert.equal(count(),1);
+  assert.match(english.iconUrl!,/^\/api\/images\/source-[a-f0-9]+$/);assert.notEqual(english.iconUrl,japanese.iconUrl);
+  const count=()=>db.get('SELECT count(*) AS n FROM source_images')!.n;assert.equal(count(),2);sources.list();sources.list();assert.equal(count(),2);
   assert.equal(db.get('SELECT count(*) AS n FROM source_image_owners')!.n,2);
   entries=entries.slice().reverse().map(e=>({...e,version:'2'}));const refreshed=await sources.refresh(repo);
   assert.equal(refreshed.find(s=>s.lang==='ja')!.id,japanese.id);assert.equal(refreshed.find(s=>s.lang==='en')!.id,legacy);

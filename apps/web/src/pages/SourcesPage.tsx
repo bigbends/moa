@@ -1,6 +1,6 @@
 import { SourceFilters, useSourceFilters } from '../components/SourceFilters';
 import { sourcePage, parseSelection } from '../lib/source-browse';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ChevronRight, Plus, Radio, RefreshCw, Search, Settings2, Trash2, Tv, X } from 'lucide-react';
@@ -59,21 +59,30 @@ export function SourceBrowsePage() {
     {sources.isSuccess && !source?.enabled ? <EmptyState title={admin ? "소스를 켜 주세요" : "지금은 쓸 수 없는 소스예요"} body={admin ? undefined : "관리자가 이 소스를 끄거나 지웠어요."} action={admin ? <ButtonLink to="/sources">소스 관리</ButtonLink> : undefined} /> : query.isPending ? <RowSkeleton /> : <><div className={cx("grid", source?.live && "live-grid")}>{items.map(card => source?.live ? <LandscapeCard card={card} key={card.id}/> : <PosterCard card={card} key={card.id}/>)}</div>{query.isError && <EmptyState title="목록을 불러오지 못했습니다" body={rawFilters ? "확장 업데이트로 조건이 달라졌을 수 있습니다. 필터를 초기화하거나 다시 선택해 주세요." : message} action={<Button onClick={() => void query.refetch()}>다시 시도</Button>} />}{!items.length && !query.isError && <EmptyState title="표시할 작품이 없습니다"/>}{query.hasNextPage && <div className="source-more"><Button disabled={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>{query.isFetchingNextPage ? '불러오는 중…' : '더 보기'}</Button></div>}</>}
   </div>;
 }
+/** Mirrors the server's host preference keys; everything else belongs to the extension. */
+const HOST_PREFERENCES = new Set(['__moa_proxy','__moa_browser']);
 function Preferences({ source }: { source: VideoSource }) {
   const query = useQuery({ queryKey: ['source-preferences',source.id], queryFn: () => api<SourcePreference[]>(`${path(source.id)}/preferences`), retry: false });
   const [changes,setChanges] = useState<Record<string,unknown>>({});
   const client = useQueryClient();
   const save = useMutation({ mutationFn: () => api<SourcePreference[]>(`${path(source.id)}/preferences`, { method: 'PATCH', body: changes }), onSuccess: data => { client.setQueryData(['source-preferences',source.id],data); setChanges({}); void client.invalidateQueries({ queryKey: ['source-page',source.id] }); void client.invalidateQueries({ queryKey: ['source-browse',source.id] }); } });
+  // Host options are stored by MOA, not the extension; they share the guest renderer and save request.
+  const guest = query.data?.filter(p => !HOST_PREFERENCES.has(p.key)), host = query.data?.filter(p => HOST_PREFERENCES.has(p.key)), hostHeading = useId();
+  const field = (p: SourcePreference) => { const value = changes[p.key] ?? p.value; const set = (v: unknown) => { save.reset(); setChanges(old => ({ ...old,[p.key]:v })); }; const id = `pref-${p.key}`, hint = p.summary ? `${id}-hint` : undefined; return <div className={cx('field', p.disabled && 'is-disabled')} key={p.key}><label htmlFor={id}>{p.title}</label>
+      {p.kind === 'boolean' ? <input disabled={p.disabled} aria-describedby={hint} id={id} type="checkbox" checked={Boolean(value)} onChange={e => set(e.target.checked)}/> : p.kind === 'select' ? <Select disabled={p.disabled} aria-describedby={hint} id={id} aria-label={p.title} value={String(value ?? '')} onChange={value => set(p.choices?.find(c => String(c.value) === value)?.value)} options={(p.choices ?? []).map(c => ({value:String(c.value),label:c.label}))} /> : p.kind === 'multi-select' ? <div>{p.choices?.map(c => <label className="source-choice" key={String(c.value)}><input disabled={p.disabled} type="checkbox" checked={Array.isArray(value) && value.includes(String(c.value))} onChange={e => set(e.target.checked ? [...(Array.isArray(value) ? value : []),String(c.value)] : (Array.isArray(value) ? value : []).filter(v => v !== String(c.value)))}/>{c.label}</label>)}</div> : <input disabled={p.disabled} aria-describedby={hint} id={id} type={p.secret ? 'password' : 'text'} value={String(value ?? '')} placeholder={p.configured ? '저장된 값 유지' : p.key === '__moa_proxy' ? '서버 기본 프록시 사용' : ''} autoComplete="off" spellCheck={p.key === '__moa_proxy' ? false : undefined} onChange={e => set(e.target.value)}/>}
+      {p.summary && <small id={hint}>{p.summary}</small>}
+    </div>; };
   return <div className="source-preferences">
     {query.isPending && <Skeleton className="folder-sk"/>}
     {query.isError && <p role="alert">설정을 불러오지 못했습니다. <button className="text-btn" onClick={() => void query.refetch()}>다시 시도</button></p>}
-    {query.data?.map(p => { const value = changes[p.key] ?? p.value; const set = (v: unknown) => { save.reset(); setChanges(old => ({ ...old,[p.key]:v })); }; return <div className="field" key={p.key}><label htmlFor={`pref-${p.key}`}>{p.title}</label>
-      {p.kind === 'boolean' ? <input id={`pref-${p.key}`} type="checkbox" checked={Boolean(value)} onChange={e => set(e.target.checked)}/> : p.kind === 'select' ? <Select id={`pref-${p.key}`} aria-label={p.title} value={String(value ?? '')} onChange={value => set(p.choices?.find(c => String(c.value) === value)?.value)} options={(p.choices ?? []).map(c => ({value:String(c.value),label:c.label}))} /> : p.kind === 'multi-select' ? <div>{p.choices?.map(c => <label className="source-choice" key={String(c.value)}><input type="checkbox" checked={Array.isArray(value) && value.includes(String(c.value))} onChange={e => set(e.target.checked ? [...(Array.isArray(value) ? value : []),String(c.value)] : (Array.isArray(value) ? value : []).filter(v => v !== String(c.value)))}/>{c.label}</label>)}</div> : <input id={`pref-${p.key}`} type={p.secret ? 'password' : 'text'} value={String(value ?? '')} placeholder={p.configured ? '저장된 값 유지' : ''} autoComplete="off" onChange={e => set(e.target.value)}/>}
-      {p.summary && <small>{p.summary}</small>}
-    </div>; })}
-    {query.data?.length === 0 && <p className="source-muted">추가 설정이 없는 소스입니다.</p>}
+    {guest?.map(field)}
+    {guest?.length === 0 && <p className="source-muted">확장 자체 설정이 없는 소스입니다.</p>}
+    {!!host?.length && <section className="source-host-preferences" aria-labelledby={hostHeading}>
+      <div><h3 id={hostHeading}>연결</h3><p>확장 자체 설정과 별개로 MOA 서버가 이 소스의 요청에 적용합니다.</p></div>
+      {host.map(field)}
+    </section>}
     {!!query.data?.length && <Button variant="primary" disabled={!Object.keys(changes).length || save.isPending} onClick={() => save.mutate()}>{save.isPending ? '저장 중…' : '설정 저장'}</Button>}
-    {save.isError && <p role="alert">설정을 저장하지 못했습니다.</p>}{save.isSuccess && <p role="status">저장했습니다.</p>}
+    {save.isError && <p role="alert">{save.error instanceof ApiError && save.error.code === 'invalid-proxy-address' ? '프록시 주소를 확인해 주세요. http://, https://, socks5:// 형식만 쓸 수 있습니다.' : '설정을 저장하지 못했습니다.'}</p>}{save.isSuccess && <p role="status">저장했습니다.</p>}
   </div>;
 }
 const LANG_LABEL: Record<string, string> = { ko: '한국어', en: '영어', ja: '일본어', zh: '중국어', 'zh-hans': '중국어 간체', 'zh-hant': '중국어 번체', es: '스페인어', fr: '프랑스어', de: '독일어', pt: '포르투갈어', ru: '러시아어', id: '인도네시아어', th: '태국어', vi: '베트남어', ar: '아랍어', it: '이탈리아어', tr: '튀르키예어', all: '다국어', multi: '다국어' };

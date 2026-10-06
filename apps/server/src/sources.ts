@@ -1,4 +1,5 @@
 import { SourceQueue, type SourceLane } from './source-queue.js';
+import { SourceBrowser } from './source-browser.js';
 import { CacheStats } from './cache-stats.js';
 import { DetailPolicy } from './detail-policy.js';
 import { SourceReadCache } from './source-cache.js';
@@ -14,6 +15,8 @@ import { ApiFailure, now } from './util.js';
 const key = (...parts: string[]) => createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 40);
 const text = (value: unknown, max = 500) => typeof value === 'string' ? value.slice(0, max) : '';
 const webUrl = (value: unknown, base: string) => { try { if (!text(value, 8192)) return undefined; const u = new URL(text(value, 8192), base || undefined); return /^https?:$/.test(u.protocol) && !u.username && !u.password ? u.href : undefined; } catch { return undefined; } };
+const hostPreference = (key: string) => key === '__moa_proxy' || key === '__moa_browser';
+const guestPreferences = (values: Record<string, unknown>) => Object.fromEntries(Object.entries(values).filter(([key]) => !hostPreference(key))) as PreferenceValues;
 export class Sources {
   private removing = new Set<string>();
   private reading = new Map<string, Set<Promise<unknown>>>();
@@ -28,9 +31,10 @@ export class Sources {
   private reads: SourceReadCache;
   readonly stats = new CacheStats();
   private details: DetailPolicy;
-  constructor(public db: Store, public catalog: Catalog, private runtime = invokeMangayomi, private fetchCode = fetchExtension, private fetchRegistry = fetchRepository, public apk = new ApkBridge()) {
+  constructor(public db: Store, public catalog: Catalog, private runtime = invokeMangayomi, private fetchCode = fetchExtension, private fetchRegistry = fetchRepository, public apk = new ApkBridge(), private browser = new SourceBrowser()) {
     db.db.exec(`CREATE TABLE IF NOT EXISTS server_network(id INTEGER PRIMARY KEY CHECK(id=1),proxy TEXT NOT NULL,revision INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS source_entries(id TEXT PRIMARY KEY,repository TEXT NOT NULL,entry TEXT NOT NULL,installed_entry TEXT,code TEXT,sha256 TEXT,preferences TEXT NOT NULL DEFAULT '{}',enabled INTEGER NOT NULL DEFAULT 0,type TEXT NOT NULL DEFAULT 'series',live INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS source_network(source_id TEXT PRIMARY KEY REFERENCES source_entries(id) ON DELETE CASCADE,proxy TEXT NOT NULL DEFAULT '',browser INTEGER NOT NULL DEFAULT 0 CHECK(browser IN (0,1)));
       CREATE TABLE IF NOT EXISTS source_media(media_id TEXT PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,source_id TEXT NOT NULL REFERENCES source_entries(id),url TEXT NOT NULL,detail_at INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS source_episodes(episode_id TEXT PRIMARY KEY REFERENCES episodes(id) ON DELETE CASCADE,url TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS source_images(id TEXT PRIMARY KEY,url TEXT NOT NULL,headers TEXT NOT NULL);
@@ -51,11 +55,15 @@ export class Sources {
     const row = this.db.get('SELECT * FROM server_network WHERE id=1');
     return { defaultProxy: row?.proxy || '', revision: row?.revision || 0 };
   }
-  proxy() { return this.network().defaultProxy || undefined; }
+  proxy(sourceId?: string) { return (sourceId ? this.db.get('SELECT proxy FROM source_network WHERE source_id=?',sourceId)?.proxy : '') || this.network().defaultProxy || undefined; }
+  private browserInvocation(id: string, proxy: string | undefined) {
+    return this.db.get('SELECT browser FROM source_network WHERE source_id=?',id)?.browser ? this.browser.invocation(id,proxy) : {};
+  }
   saveNetwork(proxy: string, revision: number) {
     let value: string; try { value = parseOutboundProxy(proxy) || ''; } catch { throw new ApiFailure(400,'invalid-proxy-address'); }
     if (this.network().revision !== revision) throw new ApiFailure(409,'network-settings-conflict');
     this.db.run('INSERT OR REPLACE INTO server_network VALUES(1,?,?)',value,revision+1);
+    for (const row of this.db.all('SELECT DISTINCT source_id FROM source_image_owners')) this.isolateImages(row.source_id);
     this.reads.clear(); this.db.run('DELETE FROM source_detail_observations'); this.db.run('UPDATE source_media SET detail_at=0');
     return this.network();
   }
@@ -168,6 +176,7 @@ export class Sources {
           this.db.run('DELETE FROM source_backups WHERE source_id=?', id);
           this.db.run('DELETE FROM source_apk WHERE source_id=?', id);
           this.db.run('DELETE FROM source_health WHERE source_id=?', id);
+          this.db.run('DELETE FROM source_network WHERE source_id=?', id);
           this.db.run("UPDATE source_entries SET code=NULL,installed_entry=NULL,sha256=NULL,preferences='{}',enabled=0 WHERE id=?", id);
           this.invalidate(id);
         }
@@ -190,7 +199,7 @@ export class Sources {
     return this.serial(id, async () => {
       const row = this.row(id, false), entry = JSON.parse(row.entry);
       if (entry.format === 'aniyomi-apk') return this.serial('apk:'+row.repository+':'+entry.package.pkg, async () => {
-        const record = await this.apk.install(entry,row.repository,this.abort.signal,this.proxy());
+        const record = await this.apk.install(entry,row.repository,this.abort.signal,this.proxy(row.id));
         // Some indexes advertise IDs that differ from IDs calculated inside the APK.
         // Match only an exact, unique name+language within the verified package; never fuzzy-match.
         const descriptorFor = (candidate: ApkEntry) => {
@@ -217,7 +226,8 @@ export class Sources {
       });
       const fetched = await this.fetchCode(entry, this.abort.signal, this.proxy());
       // Validate the new guest before replacing a working installation. No listing or playback request is made.
-      await this.runtime({entry,source:fetched.source,preferences:JSON.parse(row.preferences),action:'filters',outboundProxy:this.proxy(),signal:this.abort.signal});
+      const proxy = this.proxy(row.id);
+      await this.runtime({entry,source:fetched.source,preferences:guestPreferences(JSON.parse(row.preferences)),action:'filters',outboundProxy:proxy,signal:this.abort.signal,...this.browserInvocation(row.id,proxy)});
       this.db.transaction(() => {
         if(row.code && (row.sha256 !== fetched.sha256 || JSON.parse(row.installed_entry).version !== entry.version)) this.db.run('INSERT OR REPLACE INTO source_backups VALUES(?,?,?,?,?)',id,row.installed_entry,row.code,row.sha256 || '',row.preferences);
         this.db.run('UPDATE source_entries SET code=?,sha256=?,installed_entry=?,enabled=1 WHERE id=?', fetched.source, fetched.sha256, row.entry, id);
@@ -265,23 +275,25 @@ export class Sources {
     this.invalidate(id); return this.list().find(s => s.id === id)!;
   }
   private async call(id: string, action: string, params: Record<string, unknown> = {}) {
-    const r = this.row(id), preferences: PreferenceValues = JSON.parse(r.preferences);
+    const r = this.row(id), preferences = guestPreferences(JSON.parse(r.preferences));
     const entry = JSON.parse(r.installed_entry || r.entry);
     const operation = action === 'list' ? (params.mode === 'search' || params.query ? 'search' : 'list') : action === 'detail' || action === 'videos' || action === 'filters' ? action : undefined;
     if (entry.format === 'aniyomi-apk') return this.serial('apk:'+r.repository+':'+entry.package.pkg, async () => {
       const mapping = this.db.get('SELECT package_id FROM source_apk WHERE source_id=?',id);
       if (!mapping) throw new ApiFailure(409,'apk-installation-missing');
-      try { if(operation)this.stats.external(id,operation); const result = await this.apk.call(mapping.package_id,entry,action,params,this.proxy(),this.abort.signal); this.recordHealth(id,true,action); return result; }
+      try { if(operation)this.stats.external(id,operation); const result = await this.apk.call(mapping.package_id,entry,action,params,this.proxy(id),this.abort.signal); this.recordHealth(id,true,action); return result; }
       catch(error) { this.recordHealth(id,false,action,error); throw error; }
     });
     let result;
-    try { if(operation)this.stats.external(id,operation); result = await this.runtime({ entry: JSON.parse(r.installed_entry), source: r.code, preferences, action, params, outboundProxy: this.proxy(), signal: this.abort.signal }); } catch(error) {this.recordHealth(id,false,action,error);throw error;}
+    const proxy = this.proxy(id);
+    const browser = ['metadata','preferences'].includes(action) ? {} : this.browserInvocation(r.id,proxy);
+    try { if(operation)this.stats.external(id,operation); result = await this.runtime({ entry: JSON.parse(r.installed_entry), source: r.code, preferences, action, params, outboundProxy: proxy, signal: this.abort.signal, ...browser }); } catch(error) {this.recordHealth(id,false,action,error);throw error;}
     if(['list','detail','videos'].includes(action)) this.recordHealth(id,true,action);
     // Calls have independent guest processes. Commit only their delta against current storage;
     // another lane may have finished since this invocation read its preferences snapshot.
     this.db.transaction(() => {
-      const latest = JSON.parse(this.row(id).preferences);
-      const updated = trimPreferenceState({ ...latest, ...result.changes }, Object.keys(result.changes ?? {}));
+      const latest = guestPreferences(JSON.parse(this.row(id).preferences)), changes = guestPreferences(result.changes ?? {});
+      const updated = trimPreferenceState({ ...latest, ...changes }, Object.keys(changes));
       validatePreferenceState(updated);
       this.db.run('UPDATE source_entries SET preferences=? WHERE id=?', JSON.stringify(updated), id);
     });
@@ -290,36 +302,77 @@ export class Sources {
   async preferences(id: string, changes?: Record<string, unknown>): Promise<SourcePreference[]> {
     return this.serial(id, async () => {
       const row = this.row(id), entry = JSON.parse(row.installed_entry);
+      const js = entry.format !== 'aniyomi-apk', current = this.db.get('SELECT * FROM source_network WHERE source_id=?',id);
+      let proxy: string = current?.proxy || '', browser = Boolean(current?.browser);
+      if (changes && Object.hasOwn(changes,'__moa_proxy')) {
+        if (typeof changes.__moa_proxy !== 'string') throw new ApiFailure(400,'invalid-source-preference');
+        try { proxy = parseOutboundProxy(changes.__moa_proxy) || ''; } catch { throw new ApiFailure(400,'invalid-proxy-address'); }
+      }
+      if (changes && Object.hasOwn(changes,'__moa_browser')) {
+        if (!js || typeof changes.__moa_browser !== 'boolean') throw new ApiFailure(400,'invalid-source-preference');
+        if (changes.__moa_browser && !this.browser.configured) throw new ApiFailure(409,'source-browser-unavailable');
+        browser = changes.__moa_browser;
+      }
+      const guestChanges = changes ? guestPreferences(changes) : undefined;
+      const saveHost = () => {
+        if (!changes || !Object.keys(changes).some(hostPreference)) return;
+        this.db.run('INSERT INTO source_network VALUES(?,?,?) ON CONFLICT(source_id) DO UPDATE SET proxy=excluded.proxy,browser=excluded.browser',id,proxy,Number(browser));
+        this.isolateImages(id); this.invalidate(id);
+      };
+      const hostFields = (): SourcePreference[] => [
+        { key:'__moa_proxy', title:'개별 프록시', kind:'text', secret:false, value:proxy, summary:'비워 두면 서버 기본 프록시를 사용합니다. http://, https://, socks5:// 주소를 입력할 수 있습니다.' },
+        ...(js ? [{ key:'__moa_browser', title:'소스 브라우저 사용 - 실험', kind:'boolean' as const, secret:false, value:browser, disabled:!this.browser.configured,
+          summary:this.browser.configured ? '브라우저 호출을 지원하는 확장에서만 동작합니다. 사이트에 따라 느리거나 실패할 수 있습니다.' : '서버에 소스 브라우저 서비스가 설정되지 않았습니다.' }] : []),
+      ];
       if (entry.format === 'aniyomi-apk') return this.serial('apk:'+row.repository+':'+entry.package.pkg, async () => {
         const mapping = this.db.get('SELECT package_id FROM source_apk WHERE source_id=?',id);
         if (!mapping) throw new ApiFailure(409,'apk-installation-missing');
-        const result = await this.apk.preferences(mapping.package_id,entry,changes); if(changes) this.invalidate(id); return result;
+        const result = await this.apk.preferences(mapping.package_id,entry,guestChanges && Object.keys(guestChanges).length ? guestChanges : undefined);
+        saveHost(); if(guestChanges && Object.keys(guestChanges).length) this.invalidate(id);
+        return [...result.filter(p=>!hostPreference(p.key)),...hostFields()];
       });
-      const schema = preferenceSchema(await this.call(id, 'preferences'));
-      if (changes) {
-        if (Object.keys(changes).some(k => !schema.some(p => p.key === k))) throw new ApiFailure(400, 'invalid-source-preference');
-        for (const p of schema) if (Object.hasOwn(changes, p.key)) {
-          const v = changes[p.key];
+      const schema = preferenceSchema(await this.call(id, 'preferences')).filter(p=>!hostPreference(p.key));
+      if (guestChanges && Object.keys(guestChanges).length) {
+        if (Object.keys(guestChanges).some(k => !schema.some(p => p.key === k))) throw new ApiFailure(400, 'invalid-source-preference');
+        for (const p of schema) if (Object.hasOwn(guestChanges, p.key)) {
+          const v = guestChanges[p.key];
           if (p.kind === 'boolean' ? typeof v !== 'boolean' : p.kind === 'select' ? !p.choices?.some(c => c.value === v) : p.kind === 'multi-select' ? !Array.isArray(v) || v.some(x => !p.choices?.some(c => c.value === x)) : typeof v !== 'string' || v.length > 8192) throw new ApiFailure(400, 'invalid-source-preference');
         }
-        const state = { ...JSON.parse(this.row(id).preferences), ...changes }; validatePreferenceState(state);
+        const state = { ...guestPreferences(JSON.parse(this.row(id).preferences)), ...guestChanges }; validatePreferenceState(state);
         this.db.run('UPDATE source_entries SET preferences=? WHERE id=?', JSON.stringify(state), id); this.invalidate(id);
       }
+      saveHost();
       const state = JSON.parse(this.row(id).preferences);
-      return schema.map(p => { const v = state[p.key] ?? p.value; return { ...p, value: p.secret ? undefined : v, configured: p.secret ? Boolean(v) : undefined }; });
+      return [...schema.map(p => { const v = state[p.key] ?? p.value; return { ...p, value: p.secret ? undefined : v, configured: p.secret ? Boolean(v) : undefined }; }),...hostFields()];
     });
+  }
+  private isolateImages(sourceId: string) {
+    // Upgrade legacy shared images and rotate cache identity when this source's proxy changes.
+    for (const row of this.db.all('SELECT i.* FROM source_images i JOIN source_image_owners o ON o.image_id=i.id WHERE o.source_id=?',sourceId)) {
+      const next = this.image(sourceId,row.url,JSON.parse(row.headers))!;
+      const previous = '/api/images/'+row.id;
+      if (next === previous) continue;
+      this.db.run("UPDATE media SET metadata=json_set(metadata,'$.poster',?) WHERE id IN (SELECT media_id FROM source_media WHERE source_id=?) AND json_extract(metadata,'$.poster')=?",next,sourceId,previous);
+      this.db.run('UPDATE episodes SET thumb=? WHERE media_id IN (SELECT media_id FROM source_media WHERE source_id=?) AND thumb=?',next,sourceId,previous);
+      this.db.run('DELETE FROM source_image_owners WHERE source_id=? AND image_id=?',sourceId,row.id);
+      this.db.run('DELETE FROM source_images WHERE id=? AND NOT EXISTS (SELECT 1 FROM source_image_owners WHERE image_id=?)',row.id,row.id);
+    }
   }
   private image(sourceId: string, url: string | undefined, headers: Record<string,string>) {
     if (!url) return undefined;
-    const id = 'source-' + key(url, JSON.stringify(headers));
+    const id = 'source-' + key(sourceId,this.proxy(sourceId)||'',url, JSON.stringify(headers));
     this.db.run('INSERT OR IGNORE INTO source_images VALUES(?,?,?)', id,url,JSON.stringify(headers));
     this.db.run('INSERT OR IGNORE INTO source_image_owners VALUES(?,?)', sourceId, id);
     return `/api/images/${id}`;
   }
-  async imageContent(id: string) {
+  async imageContent(id: string, transport = compatibilityHttp) {
     const row = this.db.get('SELECT * FROM source_images WHERE id=?',id);
     if (!row) throw new ApiFailure(404,'image-not-found');
-    const result = await compatibilityHttp({url:row.url,headers:JSON.parse(row.headers)},this.abort.signal,[],8*1024*1024,this.proxy());
+    const owners = this.db.all('SELECT source_id FROM source_image_owners WHERE image_id=? ORDER BY source_id',id);
+    if (!owners.length) throw new ApiFailure(404,'image-not-found');
+    const proxies = new Set(owners.map(owner=>this.proxy(owner.source_id)));
+    if (proxies.size !== 1) throw new ApiFailure(502,'image-proxy-conflict');
+    const result = await transport({url:row.url,headers:JSON.parse(row.headers)},this.abort.signal,[],8*1024*1024,this.proxy(owners[0].source_id));
     if (result.statusCode !== 200) throw new ApiFailure(502,'image-unavailable');
     return result.bytes;
   }
