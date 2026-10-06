@@ -11,7 +11,7 @@ const creator = (name: string): SubtitleCreator => ({ id: name, name, website: "
   title: "구름 정원 2기", season: 2, episodeOffset: 11, isCurrentEpisode: true, confidence: 0.9 });
 
 function offline(client: ReturnType<typeof createSubtitleClient>) {
-  return client as unknown as { metadata: { creators: (...args: any[]) => Promise<SubtitleCreator[]> }; collector: { collect: (creator: SubtitleCreator, episode: number, signal: AbortSignal) => Promise<SubtitleCandidate | null> } };
+  return client as unknown as { metadata: { creators: (...args: any[]) => Promise<SubtitleCreator[]> }; collector: { collect: (creator: SubtitleCreator, episode: number, signal: AbortSignal) => Promise<SubtitleCandidate | null>; discover: (...args: any[]) => Promise<SubtitleCandidate[]> } };
 }
 
 test("global deadline returns completed results and cancels slower work", async () => {
@@ -112,4 +112,25 @@ test('successful existing providers never wait for or request the legacy archive
   internal.collector.collect=async c=>{names.push(c.name);if(c.name==='Example Legacy Creator') throw new Error('unexpected fallback');return c.name==='Example Creator A'?{...candidate}:null;};
   assert.equal((await client.searchSubtitles({title:'가상 작품',episode:3})).length,1);
   assert.ok(!names.includes('Example Legacy Creator'));
+});
+
+test('public discovery only runs after existing sources miss and shares the global deadline', async () => {
+  const client = createSubtitleClient(), internal = offline(client), calls: string[] = [];
+  internal.metadata.creators = async () => [];
+  internal.collector.collect = async c => { calls.push(c.name); return null; };
+  internal.collector.discover = async () => { calls.push('discovery'); return [{ ...candidate }]; };
+  assert.equal((await client.searchSubtitles({ title: '구름 정원', episode: 3 })).length, 1);
+  assert.equal(calls.at(-1), 'discovery');
+  assert.equal(calls.filter(name => name === 'Example Creator A').length, 2);
+  calls.length = 0;
+  internal.collector.collect = async () => ({ ...candidate });
+  assert.equal((await client.searchSubtitles({ title: '구름 정원', episode: 3 })).length, 1);
+  assert.deepEqual(calls, []);
+  internal.collector.collect = async () => null;
+  let aborted = false;
+  internal.collector.discover = async (_title, _episode, signal: AbortSignal) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => { aborted = true; reject(signal.reason); }, { once: true }));
+  const start = performance.now();
+  assert.deepEqual(await client.searchSubtitles({ title: '구름 정원', episode: 3, timeoutMs: 30 }), []);
+  assert.equal(aborted, true);
+  assert.ok(performance.now() - start < 500);
 });

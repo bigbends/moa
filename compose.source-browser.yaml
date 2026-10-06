@@ -1,0 +1,46 @@
+# Explicit opt-in only: add this override to the usual compose command.
+services:
+  moa:
+    image: moa:source-browser-local
+    pull_policy: never
+    environment:
+      MOA_SOURCE_BROWSER_URL: http://moa-source-browser:8799
+      MOA_SOURCE_BROWSER_SECRET_FILE: /run/moa-source-browser/token
+    volumes:
+      - ${MOA_SOURCE_BROWSER_SECRET_PATH:-moa-source-browser-secret}:/run/moa-source-browser:ro
+    depends_on:
+      moa-source-browser: {condition: service_healthy}
+  moa-source-browser:
+    image: moa-source-browser:local
+    build:
+      context: .
+      dockerfile: deploy/source-browser/Dockerfile
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    cpus: 2
+    pids_limit: 192
+    tmpfs: ["/tmp:rw,size=256m,uid=1000,gid=1000"]
+    environment:
+      HOME: /tmp
+      MOA_SOURCE_BROWSER_SECRET_FILE: /run/moa-source-browser/token
+      MOA_SOURCE_BROWSER_GENERATE_SECRET: "1"
+    volumes:
+      - ${MOA_SOURCE_BROWSER_SECRET_PATH:-moa-source-browser-secret}:/run/moa-source-browser
+    restart: unless-stopped
+    logging: {driver: json-file, options: {max-size: 10m, max-file: '3'}}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "const fs=require('node:fs');fetch('http://127.0.0.1:8799/health',{headers:{Authorization:'Bearer '+fs.readFileSync(process.env.MOA_SOURCE_BROWSER_SECRET_FILE,'utf8').trim()}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    # No published port, gateway route, APK replacement, or media relay.
+volumes:
+  moa-source-browser-secret:

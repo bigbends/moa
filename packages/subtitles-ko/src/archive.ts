@@ -187,7 +187,7 @@ async function extractOtherArchive(buf: Buffer, options: ExtractOptions): Promis
     if (!candidates.length || candidates.length > 1 && !candidates[0]!.score.exact) return null;
     const selected = candidates[0]!;
     const result = await runArchive(executable,
-      ['x','-so','-spd','-mmt=1','-pMOA_NO_PASSWORD','--',path,selected.name],
+      ['x','-so','-spd',...(buf.subarray(0,6).toString('hex') === '377abcaf271c' ? ['-mmt=1'] : []),'-pMOA_NO_PASSWORD','--',path,selected.name],
       {...settings, encoding: 'buffer', maxBuffer: Math.min(limit, selected.size) + 1});
     if (result.stdout.length !== selected.size) throw new Error('Archive member size mismatch');
     return {...convertSubtitle(decodeSubtitleBuffer(result.stdout)), filename: selected.name,

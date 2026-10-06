@@ -8,7 +8,7 @@ const video=await readFile(process.env.MOA_TEST_VIDEO);
 const root=fileURLToPath(new URL('..',import.meta.url));
 const server=await createServer({root,server:{port:0},define:{'import.meta.env.VITE_MOCK':'"0"'}});
 await server.listen();const base=`http://127.0.0.1:${server.httpServer.address().port}`;
-const browser=await chromium.launch({args:['--autoplay-policy=no-user-gesture-required']});
+const browser=await chromium.launch({executablePath:process.env.MOA_BROWSER_EXECUTABLE,args:['--autoplay-policy=no-user-gesture-required']});
 const errors=[];
 function cues(seed,offset){let t=10,r=seed;return 'WEBVTT\n\n'+Array.from({length:240},()=>{r=(r*1664525+1013904223)>>>0;t+=1.7+r/2**32*7;const fmt=s=>{const ms=Math.round(s*1000);return `${String(Math.floor(ms/3600000)).padStart(2,'0')}:${String(Math.floor(ms/60000)%60).padStart(2,'0')}:${String(Math.floor(ms/1000)%60).padStart(2,'0')}.${String(ms%1000).padStart(3,'0')}`;};return `${fmt(t+offset)} --> ${fmt(t+offset+1.4)}\n대사\n\n`;}).join('');}
 async function scenario({enabled=true,wrong=false,manual=false,offDuringCheck=false}={}){
@@ -19,13 +19,17 @@ async function scenario({enabled=true,wrong=false,manual=false,offDuringCheck=fa
  const calls={reference:0,online:0,apply:0};
  await context.route('**/fixture/**',async route=>{
   const path=new URL(route.request().url()).pathname;
-  if(path.endsWith('video.mp4'))return route.fulfill({contentType:'video/mp4',body:video});
+  if(path.endsWith('video.mp4')){
+   const range=route.request().headers().range?.match(/^bytes=(\d+)-(\d*)$/),start=Number(range?.[1]||0),end=Math.min(video.length-1,range?.[2]?Number(range[2]):video.length-1);
+   return route.fulfill({status:range?206:200,contentType:'video/mp4',body:video.subarray(start,end+1),headers:{'Accept-Ranges':'bytes',...(range?{'Content-Range':`bytes ${start}-${end}/${video.length}`}:{})}});
+  }
   if(path.endsWith('reference.vtt')){calls.reference++;if(offDuringCheck&&calls.reference>1)await new Promise(r=>setTimeout(r,1800));return route.fulfill({contentType:'text/vtt',body:cues(12,0)});}
   calls.online++;return route.fulfill({contentType:'text/vtt',body:cues(wrong?900:12,-3.25)});
  });
  await context.route(url=>url.pathname.startsWith('/api/'),route=>{
   const request=route.request(),path=new URL(request.url()).pathname;
   const json=body=>route.fulfill({json:body});
+  if(path==='/api/plugins')return json([]);
   if(path==='/api/me')return json({id:'test',role:'member',username:'test'});
   if(path==='/api/translation/config')return json({configured:false,enabled:false,keys:[],batchSize:120,requestIntervalMs:1000,retryCount:2});
   if(path==='/api/settings')return json({autoplayNext:false,autoplayDelay:5,defaultSubtitleLang:'ko',subtitleSize:'medium',preferredQuality:'auto',hardwareTranscoding:true,autoFetchSubtitles:true,experimentalSubtitleSync:enabled,translationMode:'manual',skipSubtitleSearchWithSiteTrack:true});

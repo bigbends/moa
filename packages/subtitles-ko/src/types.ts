@@ -44,7 +44,7 @@ export interface SubtitleCreator {
   latestEpisode?: string;
   updatedAt?: string;
   isCurrentEpisode: boolean;
-  source: "anissia" | "archive" | "directory";
+  source: "anissia" | "archive" | "search" | "directory";
   animeNo?: number;
   title: string;
   season: number;

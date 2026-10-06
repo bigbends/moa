@@ -36,12 +36,12 @@ export interface EngineHandle {
 export type FatalHandler = (message: string) => void;
 
 /** Attach a playback session to a <video>. hls.js is loaded only when needed. */
-export async function attach(video: HTMLVideoElement, session: PlaybackSession, start: number, onFatal: FatalHandler): Promise<EngineHandle> {
+export async function attach(video: HTMLVideoElement, session: PlaybackSession, start: number, onFatal: FatalHandler, native = false): Promise<EngineHandle> {
   const isHls = session.mime === "application/vnd.apple.mpegurl" || /\.m3u8(\?|$)/.test(session.url);
   const nativeError = () => onFatal("영상 데이터를 재생하지 못했습니다.");
   const noop: EngineHandle = { destroy() { video.removeEventListener("error",nativeError); video.removeAttribute("src"); video.load(); }, levels: () => [], setLevel() {} };
 
-  if (!isHls || (!(await hlsSupported()) && video.canPlayType("application/vnd.apple.mpegurl"))) {
+  if (native || !isHls || (!(await hlsSupported()) && video.canPlayType("application/vnd.apple.mpegurl"))) {
     video.addEventListener("error",nativeError);
     video.src = start > 0 ? `${session.url}#t=${start}` : session.url;
     return noop;
@@ -86,29 +86,84 @@ export type SubtitleAppearance = { size: "small" | "medium" | "large" | "xlarge"
 /** Shows one subtitle track at a time: VTT via <track>, ASS via libass (JASSUB). */
 export class SubtitleController {
   private trackEl: HTMLTrackElement | null = null;
+  private overlay: HTMLDivElement | null = null;
+  private resizeObserver: ResizeObserver | null = null;
+  private videoObserver: MutationObserver | null = null;
+  private refreshVtt = () => this.setLift(this.lifted);
   private ass: Jassub | null = null;
   private token = 0;
   private offset = 0;
   private shifted = 0;
   private appearance: SubtitleAppearance = { size: "medium", background: "original" };
   private originalStyles: AssStyle[] = [];
+  private originalEvents: Awaited<ReturnType<Jassub["renderer"]["getEvents"]>> | null = null;
+  private styled = false;
   private styling: Promise<void> = Promise.resolve();
 
   setAppearance(value: SubtitleAppearance) {
     this.appearance = value;
     this.setLift(this.lifted);
+    this.renderVtt();
     return this.applyAppearance();
   }
+
+  private renderVtt = () => {
+    const track = this.trackEl?.track, parent = this.video.parentElement;
+    if (!track || !parent) return;
+    const native = this.appearance.background === "original" || document.pictureInPictureElement === this.video
+      || (this.video as HTMLVideoElement & { webkitDisplayingFullscreen?: boolean }).webkitDisplayingFullscreen;
+    track.mode = native ? "showing" : "hidden";
+    if (native) { this.overlay?.remove(); this.overlay = null; return; }
+    if (!this.overlay) {
+      this.overlay = document.createElement("div");
+      this.overlay.className = "subtitle-overlay";
+      parent.append(this.overlay);
+    }
+    const rect = this.video.getBoundingClientRect(), box = parent.getBoundingClientRect(), style = getComputedStyle(this.video);
+    if (!rect.width || !rect.height) return;
+    const scale = (style.objectFit === "cover" ? Math.max : Math.min)(rect.width / (this.video.videoWidth || rect.width), rect.height / (this.video.videoHeight || rect.height));
+    const contentWidth = (this.video.videoWidth || rect.width) * scale, contentHeight = (this.video.videoHeight || rect.height) * scale;
+    const left = Math.max(box.left, rect.left + (rect.width - contentWidth) / 2), top = Math.max(box.top, rect.top + (rect.height - contentHeight) / 2);
+    const width = Math.min(box.right, rect.left + (rect.width + contentWidth) / 2) - left, height = Math.min(box.bottom, rect.top + (rect.height + contentHeight) / 2) - top;
+    Object.assign(this.overlay.style, { left: `${left - box.left}px`, top: `${top - box.top}px`, width: `${width}px`, height: `${height}px` });
+    this.overlay.dataset.background = this.appearance.background;
+    this.overlay.replaceChildren();
+    const step = (parseFloat(style.fontSize) || 18) * 1.35, occupied: DOMRect[] = [];
+    for (const cue of Array.from(track.activeCues ?? []) as VTTCue[]) {
+      const line = document.createElement("div"), text = document.createElement("span"), vertical = Boolean(cue.vertical);
+      line.className = "subtitle-cue";
+      line.style.textAlign = cue.align;
+      line.style.writingMode = vertical ? cue.vertical === "rl" ? "vertical-rl" : "vertical-lr" : "horizontal-tb";
+      const fragment = cue.getCueAsHTML();
+      for (const element of fragment.querySelectorAll("[class]")) element.removeAttribute("class");
+      text.append(fragment); line.append(text); this.overlay.append(line);
+      const align = cue.positionAlign === "auto" ? cue.align === "start" || cue.align === "left" ? 0 : cue.align === "end" || cue.align === "right" ? 1 : .5 : cue.positionAlign === "line-left" ? 0 : cue.positionAlign === "line-right" ? 1 : .5;
+      const position = cue.position === "auto" ? align * 100 : cue.position;
+      const size = Math.min(cue.size, align === 0 ? 100 - position : align === 1 ? position : Math.min(position, 100 - position) * 2);
+      line.style[vertical ? "height" : "width"] = `${size}%`;
+      line.style[vertical ? "top" : "left"] = `${position - size * align}%`;
+      const extent = vertical ? line.offsetWidth : line.offsetHeight, limit = vertical ? width : height;
+      let start = cue.line === "auto" ? limit - extent : cue.snapToLines ? cue.line < 0 ? limit + cue.line * step : cue.line * step : cue.line / 100 * limit - extent * (cue.lineAlign === "center" ? .5 : cue.lineAlign === "end" ? 1 : 0);
+      start = Math.max(0, Math.min(limit - extent, start));
+      line.style[vertical ? cue.vertical === "rl" ? "right" : "left" : "top"] = `${start}px`;
+      if (!vertical && cue.snapToLines) {
+        while (occupied.some(other => { const current = line.getBoundingClientRect(); return current.left < other.right && current.right > other.left && current.top < other.bottom && current.bottom > other.top; }) && start > 0) {
+          start = Math.max(0, start - step); line.style.top = `${start}px`;
+        }
+      }
+      occupied.push(line.getBoundingClientRect());
+    }
+  };
   private applyAppearance() {
     const renderer = this.ass, token = this.token;
     this.styling = this.styling.catch(() => {}).then(async () => {
       if (!renderer || token !== this.token || !this.originalStyles.length) return;
       const { size, background } = this.appearance;
+      const originalAppearance = size === "medium" && background === "original";
+      if (originalAppearance && !this.styled) return;
       for (const [index, original] of this.originalStyles.entries()) {
         if (token !== this.token) return;
         const style = { ...original, FontSize: original.FontSize * ({ small: .8, medium: 1, large: 1.3, xlarge: 1.65 }[size]) };
-        // libass stores colors as RRGGBBAA (inverted alpha). Restore from the
-        // original each time so repeated changes never compound font sizes.
         if (background === "soft" || background === "solid") {
           style.BorderStyle = 3; style.Outline = 2; style.Shadow = 0;
           style.OutlineColour = background === "soft" ? 0x80 : 0x00;
@@ -118,12 +173,28 @@ export class SubtitleController {
         }
         await renderer.renderer.setStyle(style, index);
       }
+      if (background !== "original" && !this.originalEvents) this.originalEvents = await renderer.renderer.getEvents();
+      for (const [index, event] of this.originalEvents?.entries() ?? []) {
+        if (token !== this.token) return;
+        const Text = event.Text?.replace(/\{[^}]*\}/g, block => block
+          .replace(/\\(?:[xy]?(?:bord|shad)|[34][ca])[^\\})]*/gi, "")
+          .replace(/\\alpha(&H[0-9a-f]+&?)/gi, "\\1a$1\\2a$1"));
+        if (Text !== event.Text) await renderer.renderer.setEvent({ ...event, Text: background === "original" ? event.Text : Text } as Parameters<Jassub["renderer"]["setEvent"]>[0], index);
+      }
+      if (token !== this.token) return;
+      this.styled = !originalAppearance;
+      if (background === "original") this.originalEvents = null;
       if (token === this.token && renderer._lastDemandTime) await renderer._demandRender(true);
     });
     return this.styling;
   }
 
-  constructor(private video: HTMLVideoElement, private fonts: string[] = []) {}
+  constructor(private video: HTMLVideoElement, private fonts: string[] = []) {
+    for (const event of ["enterpictureinpicture", "leavepictureinpicture", "webkitbeginfullscreen", "webkitendfullscreen", "transitionend", "loadedmetadata", "resize"]) video.addEventListener?.(event, this.refreshVtt);
+    document.fonts?.addEventListener("loadingdone", this.refreshVtt);
+    if (typeof ResizeObserver !== "undefined") { this.resizeObserver = new ResizeObserver(this.refreshVtt); this.resizeObserver.observe(video); }
+    if (typeof MutationObserver !== "undefined") { this.videoObserver = new MutationObserver(this.refreshVtt); this.videoObserver.observe(video, { attributes: true, attributeFilter: ["style", "class"] }); }
+  }
 
   async show(track: SubtitleTrack | null) {
     this.clear();
@@ -139,6 +210,7 @@ export class SubtitleController {
       this.video.append(el);
       el.track.mode = "showing";
       this.trackEl = el;
+      el.track.oncuechange = this.renderVtt;
       this.shifted = 0;
       el.addEventListener("load", () => {
         if (this.trackEl === el) this.applyVttOffset();
@@ -146,9 +218,10 @@ export class SubtitleController {
       return;
     }
     try {
-      const [{ default: JASSUB }, fallbackFont] = await Promise.all([
+      const [{ default: JASSUB }, fallbackFont, cjkFont] = await Promise.all([
         import("jassub"),
-        import("pretendard/dist/public/static/Pretendard-Regular.otf?url").then(module => module.default as string)
+        import("pretendard/dist/public/static/Pretendard-Regular.otf?url").then(module => module.default as string),
+        import("../assets/fonts/NotoSansCJKjp-Regular.woff2?url").then(module => module.default as string)
       ]);
       if (token !== this.token) return;
       const workerUrl = compatibilityPlayback() ? (await import("./subtitle-worker.ts?worker&url")).default : undefined;
@@ -158,10 +231,10 @@ export class SubtitleController {
         video: this.video,
         subUrl: track.url,
         // Load the fallback before the first frame, including paused seeks.
-        fonts: [...this.fonts, fallbackFont],
+        fonts: [...this.fonts, fallbackFont, cjkFont],
         // Korean glyphs: default libass fallback has none.
-        availableFonts: { pretendard: fallbackFont },
-        defaultFont: "pretendard",
+        availableFonts: { pretendard: fallbackFont, "noto sans cjk jp": cjkFont },
+        defaultFont: "noto sans cjk jp",
         prescaleFactor: 1,
         maxRenderHeight: 1440,
         // JASSUB adds timeOffset to mediaTime; negating it delays subtitles.
@@ -198,6 +271,8 @@ export class SubtitleController {
         await renderer.renderer.setTrackByUrl(track.url);
         if (token !== this.token) return;
         this.originalStyles = await renderer.renderer.getStyles();
+        this.originalEvents = null;
+        this.styled = false;
         if (token === this.token) await this.applyAppearance();
       });
       this.assSwaps = swap;
@@ -223,16 +298,17 @@ export class SubtitleController {
     el.track.mode = "showing";
     if (old) { old.track.mode = "disabled"; old.remove(); }
     this.trackEl = el;
+    el.track.oncuechange = this.renderVtt;
     this.shifted = 0;
     this.applyVttOffset();
   }
 
   private lifted = false;
-  private height = 8;
+  private height = 0;
   private cueRows = new WeakMap<VTTCue, { key: string; rows: number }>();
   private cuePositions = new WeakMap<VTTCue,{line:number|AutoKeyword;snapToLines:boolean;lineAlign:LineAlignSetting}>();
   setHeight(percent: number) {
-    this.height = Math.max(0, Math.min(30, Number.isFinite(percent) ? percent : 8));
+    this.height = Math.max(0, Math.min(30, Number.isFinite(percent) ? percent : 0));
     this.setLift(this.lifted);
   }
 
@@ -255,7 +331,7 @@ export class SubtitleController {
     // does not implement lineAlign. Include the complete wrapped block height.
     const measure = style ? document.createElement("div") : null;
     if (measure) {
-      measure.style.cssText = `position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;white-space:pre-wrap;overflow-wrap:break-word;padding:0;border:0;margin:0;font:600 ${fontSize}px/${step}px "Pretendard Variable",Pretendard,sans-serif;`;
+      measure.style.cssText = `position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;white-space:pre-wrap;overflow-wrap:break-word;padding:0;border:0;margin:0;font:600 ${fontSize}px/${step}px "Pretendard Variable",Pretendard,"Noto Sans CJK JP",sans-serif;`;
       document.body.append(measure);
     }
     try {
@@ -275,7 +351,7 @@ export class SubtitleController {
         this.cueRows.set(cue, {key, rows});
         // Preserve deliberately placed/vertical cues at position zero, but keep
         // ordinary bottom captions inside the viewport even with large fonts.
-        const managed = lifted || this.height > 0 || (!cue.vertical && original.line === "auto");
+        const managed = this.height > 0 || (!cue.vertical && original.line === "auto");
         const line = managed ? -paddingLines - rows : original.line;
         const snap = managed ? true : original.snapToLines;
         if (cue.line === line && cue.snapToLines === snap && cached?.key === key) continue;
@@ -286,6 +362,7 @@ export class SubtitleController {
         track!.addCue(cue);
       }
     } finally { measure?.remove(); }
+    this.renderVtt();
   }
 
   /** Shift subtitles by `seconds` (positive = show later). */
@@ -310,12 +387,22 @@ export class SubtitleController {
     this.token++;
     this.trackEl?.remove();
     this.trackEl = null;
+    this.overlay?.remove();
+    this.overlay = null;
     for (const t of Array.from(this.video.textTracks)) t.mode = "disabled";
     // destroy() still terminates JASSUB's worker if ready rejects.
     if (this.ass) void Promise.resolve(this.ass.destroy()).catch(() => {});
     this.ass = null;
     this.originalStyles = [];
+    this.originalEvents = null;
+    this.styled = false;
   }
 
-  destroy() { this.clear(); }
+  destroy() {
+    this.clear();
+    this.resizeObserver?.disconnect();
+    this.videoObserver?.disconnect();
+    document.fonts?.removeEventListener("loadingdone", this.refreshVtt);
+    for (const event of ["enterpictureinpicture", "leavepictureinpicture", "webkitbeginfullscreen", "webkitendfullscreen", "transitionend", "loadedmetadata", "resize"]) this.video.removeEventListener?.(event, this.refreshVtt);
+  }
 }

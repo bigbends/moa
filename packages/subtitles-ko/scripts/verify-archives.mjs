@@ -11,7 +11,7 @@ try {
   await writeFile(join(dir,filename), '1\n00:00:01,000 --> 00:00:02,000\n검증 자막\n');
   for (const format of ['7z','tar']) {
     const archive=join(dir,`test.${format}`);
-    execFileSync(process.env.MOA_7ZIP || '7z',['a',`-t${format}`,'-mmt=1',archive,filename],{cwd:dir,stdio:'ignore'});
+    execFileSync(process.env.MOA_7ZIP || '7z',['a',`-t${format}`,archive,filename],{cwd:dir,stdio:'ignore'});
     const data=await readFile(archive);
     assert.ok((await extractSubtitleBuffer(data,archive,{episode:3}))?.content.includes('검증 자막'));
     assert.equal(await extractSubtitleBuffer(data,archive,{episode:4}),null);

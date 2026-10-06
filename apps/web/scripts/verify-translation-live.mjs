@@ -34,7 +34,7 @@ const server = await createServer({
 });
 await server.listen();
 const base = server.resolvedUrls.local[0].replace(/\/$/, '');
-const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
+const browser = await chromium.launch({ executablePath: process.env.MOA_BROWSER_EXECUTABLE, args: ['--autoplay-policy=no-user-gesture-required'] });
 const errors = [];
 const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 await context.addInitScript(() => {
@@ -78,17 +78,20 @@ try {
   /* ---------- settings: mode select and disclosure ---------- */
   step = 'settings'; console.log('STEP', step);
   await page.reload();
-  const mode = page.getByLabel('AI 자막 번역 방식');
+  const mode = page.getByRole('combobox', { name: 'AI 자막 번역 방식' });
   await mode.waitFor();
-  assert.equal(await mode.inputValue(), 'manual');
-  await mode.selectOption('auto');
-  await page.getByText('자막 내용과 작품 정보가 Gemini로 전송돼 사용료가 발생해요').waitFor();
+  assert.equal(await mode.textContent(), '직접 번역');
+  await mode.click();
+  await page.getByRole('option', { name: '자동 번역', exact: true }).click();
+  await page.getByText('자막 내용과 작품 정보가 설정한 AI 서비스로 전송돼 사용료가 발생해요').waitFor();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('moa.mockTranslation') || '{}').settings?.translationMode === 'auto');
-  await mode.selectOption('ask');
-  await page.getByText('‘번역하기’를 누를 때만 자막 내용과 작품 정보가 Gemini로 전송되고').waitFor();
+  await mode.click();
+  await page.getByRole('option', { name: '번역할지 묻기', exact: true }).click();
+  await page.getByText('‘번역하기’를 누를 때만 자막 내용과 작품 정보가 설정한 AI 서비스로 전송되고').waitFor();
   await page.locator('.setting-translation-mode').screenshot({ path: path.join(evidence, 'settings-mode.png') });
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('moa.mockTranslation') || '{}').settings?.translationMode === 'ask');
-  await mode.selectOption('manual');
+  await mode.click();
+  await page.getByRole('option', { name: '직접 번역', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('moa.mockTranslation') || '{}').settings?.translationMode === 'manual');
 
   /* ---------- manual: nothing is searched, suggested or translated ---------- */

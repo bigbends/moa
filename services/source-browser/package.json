@@ -1,0 +1,8 @@
+{
+  "name": "moa-source-browser",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "dependencies": { "socks": "2.8.10" },
+  "scripts": { "test": "node --test tests/*.test.mjs" }
+}

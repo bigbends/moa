@@ -8,6 +8,6 @@
     "dev:server": "corepack pnpm --filter @moa/server dev",
     "build": "corepack pnpm -r build",
     "typecheck": "corepack pnpm -r typecheck",
-    "test": "corepack pnpm -r test"
+    "test": "node --test scripts/update.test.mjs && corepack pnpm -r test"
   }
 }

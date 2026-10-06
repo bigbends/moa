@@ -1,3 +1,7 @@
+import { registerWebsitePlugins } from './website-plugins.js';
+import { registerUpdates } from './updates.js';
+import { Casting } from './casting.js';
+import { SubtitleLibrary } from './subtitle-library.js';
 import { RemoteAccess, connectorRpc } from './remote-access.js';
 import { readFile } from 'node:fs/promises';
 import { ImageCache, IMAGE_CACHE_TTL } from './image-cache.js';
@@ -26,6 +30,7 @@ import { randomUUID } from 'node:crypto';
 import { OnlineSubtitles, type OnlineClient } from './online.js';
 import { Enrichment, type EnrichmentOptions } from './enrichment.js';
 import { Tmdb } from './tmdb.js';
+import { ProfilePins, hashPin } from './profile-pin.js';
 
 declare module 'fastify' { interface FastifyRequest { moaProfile?: string; moaAccount: Account } }
 const COLORS = ['red', 'blue', 'green', 'amber', 'violet', 'teal'];
@@ -33,7 +38,7 @@ const TYPES = ['movie', 'series', 'anime'];
 const string = { type: 'string', minLength: 1, maxLength: 200 };
 const idParams = (key = 'id') => ({ type: 'object', required: [key], properties: { [key]: string } });
 const object = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', additionalProperties: false, properties, required });
-const profileFields = { avatar: { type: ['string', 'null'], pattern: '^[a-z]+-[0-9]{1,2}$', maxLength: 64 }, name: { ...string, pattern: '\\S' }, color: { type: 'string', enum: COLORS }, kids: { type: 'boolean' } };
+const profileFields = { pin: { type: ['string', 'null'], pattern: '^[0-9]{4,8}$' }, avatar: { type: ['string', 'null'], pattern: '^[a-z]+-[0-9]{1,2}$', maxLength: 64 }, name: { ...string, pattern: '\\S' }, color: { type: 'string', enum: COLORS }, kids: { type: 'boolean' } };
 const filterChange = object({ position: { type: 'integer', minimum: 0, maximum: 511 }, groupPosition: { type: 'integer', minimum: 0, maximum: 511 }, value: { type:['string','number','boolean','object'], maxLength:2000, additionalProperties:false, properties:{index:{type:'integer',minimum:0},ascending:{type:'boolean'}}, required:['index','ascending'] } }, ['position','value']);
 const browseSelection = object({ revision: {type:'string',maxLength:80}, filters: {type:'array',maxItems:512,items:filterChange} }, ['revision','filters']);
 const settingsFields = { navigation: { type: "array", minItems: 1, maxItems: 12, items: object({ id: { type: "string", pattern: "^[a-zA-Z0-9_-]{1,64}$" }, name: { type: "string", minLength: 1, maxLength: 24, pattern: "\\S" }, sourceIds: { type: "array", maxItems: 32, uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 128 } }, sourceFilters: { type: "object", maxProperties:32, additionalProperties: browseSelection }, includeLocal: { type: "boolean" } }, ["id", "name", "sourceIds", "includeLocal"]) }, autoplayNext: { type: 'boolean' }, autoplayDelay: { type: 'number', minimum: 0 }, defaultSubtitleLang: { type: 'string', maxLength: 32 }, subtitleSize: { type: 'string', enum: ['small', 'medium', 'large', 'xlarge'] }, preferredQuality: { type: 'string', enum: ['auto', '1080', '720', '480'] }, hardwareTranscoding: { type: 'boolean' }, autoFetchSubtitles: { type: 'boolean' }, experimentalSubtitleSync: { type: 'boolean' }, translationMode: { type: 'string', enum: ['manual','ask','auto'] }, translationSourcePriority: { type: 'string', enum: ['site','jimaku'] }, skipSubtitleSearchWithSiteTrack: { type: 'boolean' }, skipTranslationWithoutSubtitles: { type: 'boolean' } };
@@ -42,7 +47,7 @@ const validateNavigation = (tabs: NavigationTab[] | null | undefined) => {
 };
 const pageQuery = { type: 'integer', minimum: 1, maximum: 1_000_000, default: 1 };
 const typeQuery = { type: 'string', enum: TYPES };
-const toProfile = (p: Record<string, any>): Profile => ({ id: p.id, name: p.name, color: p.color, kids: Boolean(p.kids), createdAt: p.created_at, avatar: p.avatar ?? null });
+const toProfile = (p: Record<string, any>): Profile => ({ id: p.id, name: p.name, color: p.color, kids: Boolean(p.kids), createdAt: p.created_at, avatar: p.avatar ?? null, hasPin: Boolean(p.pin_hash) });
 const profile = (req: FastifyRequest) => req.moaProfile!;
 const params = (req: FastifyRequest) => req.params as Record<string, string>;
 const query = (req: FastifyRequest) => req.query as Record<string, any>;
@@ -62,8 +67,13 @@ export async function sendFile(reply: FastifyReply, file: string, mime: string, 
 }
 export async function buildApp(overrides: Partial<Config> = {}, logger = true, services: EnrichmentOptions & { store?: Store; subtitleClient?: OnlineClient; translationFetch?: typeof fetch; jimakuFetch?: typeof fetch; tmdb?: { token?: string; key?: string; fetch?: typeof fetch } } = {}) {
   const cfg = makeConfig(overrides);
-  const app = Fastify({ logger, bodyLimit: 1024 * 1024, ajv: { customOptions: { removeAdditional: false, coerceTypes: 'array', allowUnionTypes: true } } });
+  const app = Fastify({ logger: logger ? { serializers: { req: req => {
+    let url: string;
+    try { url = decodeURIComponent(req.url).replace(/(\/cast\/)[^/?]+/g, '$1[redacted]'); } catch { url = '[invalid-url]'; }
+    return { method: req.method, url, hostname: req.hostname, remoteAddress: req.ip, remotePort: req.socket?.remotePort };
+  } } } : false, bodyLimit: 1024 * 1024, ajv: { customOptions: { removeAdditional: false, coerceTypes: 'array', allowUnionTypes: true } } });
   const db = services.store ?? new Store(cfg.dataDir), catalog = new Catalog(db);
+  const pins = new ProfilePins(db);
   const sources = new Sources(db, catalog);
   const connectorSecret = process.env.MOA_CONNECTOR_SECRET_FILE || '/run/moa-connector/token';
   const remoteAccess = new RemoteAccess(cfg.dataDir, process.env.MOA_CONNECTOR_URL ? connectorRpc(process.env.MOA_CONNECTOR_URL, connectorSecret) : null, async () => {
@@ -89,10 +99,12 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
   const online = new OnlineSubtitles(db, value => app.log.info(value), services.subtitleClient);
   const jimaku = new Jimaku(db, catalog, services.jimakuFetch);
   const translations = new Translations(db, catalog, cfg.dataDir, new Gemini(services.translationFetch));
+  const subtitleLibrary = new SubtitleLibrary(db, catalog, translations, online);
   const remotePlayback = new RemotePlayback(db, catalog, sources, undefined, online);
   const enrichment = new Enrichment(db, cfg, online, value => app.log.info(value), services);
   const library = new Library(db, cfg, message => app.log.warn(message), () => enrichment.schedule());
   const playback = new Playback(db, catalog, cfg, value => app.log.info(value), online, enrichment);
+  const casting = new Casting(db, (id, profile) => remotePlayback.sessions.has(id) ? remotePlayback.get(id, profile) : playback.get(id, profile));
   /** Give TMDB a moment to link new titles so first visits already show its artwork. */
   const withMetadata = async <T extends { items: { id: string }[] }>(page: T, profileId: string): Promise<T> => {
     const unlinked = page.items.map(c => c.id).filter(id => !db.get('SELECT 1 FROM tmdb_links WHERE media_id=?', id));
@@ -113,6 +125,7 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
     // The router decodes static path segments; authorize its matched route, not the raw URL.
     const url = req.routeOptions.url ?? req.url.split('?')[0];
     if (!url.startsWith('/api/') || url === '/api/health') return;
+    if (url.startsWith('/api/cast/') && ['GET', 'HEAD', 'OPTIONS'].includes(req.method)) { casting.authorize(req); return; }
     const id = req.headers['x-moa-account'], role = req.headers['x-moa-role'];
     if (id === undefined && role === undefined && !cfg.requireAccount) req.moaAccount = { id: 'local', username: 'local', role: 'admin' };
     else {
@@ -137,13 +150,18 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
     if (scoped || copyNavigation || sessionAsset && header !== undefined) {
       if (typeof header !== 'string' || !db.get('SELECT id FROM profiles WHERE id=? AND account_id=?', header, req.moaAccount.id)) throw new ApiFailure(401, 'profile-required');
       req.moaProfile = header;
+      pins.assert(header, req);
     }
     if (sessionAsset) {
       const sessionId = params(req).sessionId;
-      const owner = playback.sessions.get(sessionId)?.profile ?? remotePlayback.sessions.get(sessionId)?.profile ?? online.assetProfile(sessionId) ?? translations.assetProfile(sessionId);
+      const owner = playback.sessions.get(sessionId)?.profile ?? remotePlayback.sessions.get(sessionId)?.profile ?? online.assetProfile(sessionId) ?? translations.assetProfile(sessionId) ?? subtitleLibrary.assetProfile(sessionId);
       if (owner && !db.get('SELECT 1 FROM profiles WHERE id=? AND account_id=?', owner, req.moaAccount.id)) throw new ApiFailure(403, 'session-account-mismatch');
+      if (owner) pins.assert(owner, req);
     }
   });
+  registerWebsitePlugins(app, db);
+  registerUpdates(app);
+  casting.register(app);
   app.get('/api/admin/apk/status', async (_req, reply) => reply.header('Cache-Control', 'private, no-store').send(await sources.apk.status()));
   app.get('/api/admin/tmdb/config', async (_req, reply) => reply.header('Cache-Control', 'private, no-store').send(tmdb.status()));
   app.patch('/api/admin/tmdb/config', { schema: { body: object({
@@ -169,8 +187,9 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
   app.get('/api/episodes/:id/subtitles/jimaku', { schema: { params: idParams(), querystring: object({ title: { type: 'string', minLength: 1, maxLength: 300 }, season: { type: 'integer', minimum: 1, maximum: 99 }, episode: { type: 'number', minimum: 0, maximum: 10000 } }) } }, async req => jimaku.search(params(req).id, profile(req), query(req)));
   app.post('/api/episodes/:id/subtitles/jimaku/translate', { schema: { params: idParams(), body: object({ searchId: string, candidateId: string, startAt: {type: 'number', minimum: 0, maximum: 864000} }, ['searchId','candidateId']) } }, async req => { const body = req.body as { searchId: string; candidateId: string; startAt?: number }; return jimaku.translate(params(req).id, profile(req), body.searchId, body.candidateId, translations, body.startAt); });
   app.get('/api/translation/config', async () => translations.config());
-  app.patch('/api/admin/translation/config', { schema: { body: object({ apiKey: { type: 'string', minLength: 16, maxLength: 256 }, model: { type: 'string', maxLength: 102 }, enabled: { type: 'boolean' }, clearKey: { type: 'boolean' }, batchSize: { type: 'integer', minimum: 10, maximum: 300 }, requestIntervalMs: { type: 'integer', minimum: 0, maximum: 60000 }, retryCount: { type: 'integer', minimum: 0, maximum: 5 }, addKeys: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 16, maxLength: 256 } }, removeKeyIds: { type: 'array', maxItems: 8, items: { type: 'string', pattern: '^[a-f0-9]{16}$' } } }) } }, async req => translations.configure(req.body as Parameters<Translations['configure']>[0]));
+  app.patch('/api/admin/translation/config', { schema: { body: object({ provider: { type: 'string', enum: ['gemini', 'openai'] }, baseUrl: { type: 'string', maxLength: 2048 }, apiKey: { type: 'string', minLength: 1, maxLength: 512 }, model: { type: 'string', maxLength: 200 }, enabled: { type: 'boolean' }, clearKey: { type: 'boolean' }, batchSize: { type: 'integer', minimum: 10, maximum: 300 }, requestIntervalMs: { type: 'integer', minimum: 0, maximum: 60000 }, retryCount: { type: 'integer', minimum: 0, maximum: 5 }, addKeys: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1, maxLength: 512 } }, removeKeyIds: { type: 'array', maxItems: 8, items: { type: 'string', pattern: '^[a-f0-9]{16}$' } } }) } }, async req => translations.configure(req.body as Parameters<Translations['configure']>[0]));
   app.get('/api/admin/translation/models', async () => translations.models());
+  app.post('/api/admin/translation/keys/:id/test', { schema: { params: object({ id: { type: 'string', pattern: '^[a-f0-9]{16}$' } }, ['id']) } }, async req => translations.testKey(params(req).id));
   app.post('/api/episodes/:id/subtitles/translate', { bodyLimit: 2 * 1024 * 1024, schema: { params: idParams(), body: object({ content: { type: 'string', minLength: 1, maxLength: 1024 * 1024 }, format: { type: 'string', enum: ['ass','vtt','srt','smi'] }, sourceLabel: { type: 'string', maxLength: 200 }, sourceLanguage: { type: 'string', maxLength: 32 }, startAt: {type: 'number', minimum: 0, maximum: 864000} }, ['content','format','sourceLabel']) } }, async req => translations.start(params(req).id, profile(req), req.body as Parameters<Translations['start']>[2]));
   app.get('/api/episodes/:id/subtitles/translations', { schema: { params: idParams() } }, async req => translations.tracks(params(req).id, profile(req)));
   app.get('/api/translations/:id', { schema: { params: idParams() } }, async req => translations.get(params(req).id, profile(req)));
@@ -178,6 +197,7 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
   app.delete('/api/translations/:id', { schema: { params: idParams() } }, async (req, reply) => { translations.cancel(params(req).id, profile(req)); return reply.code(204).send(); });
 
   async function removeProfile(id: string) {
+    pins.invalidate(id);
     // Delete the ownership row before awaiting process cleanup so concurrent asset requests fail closed.
     db.run('DELETE FROM profiles WHERE id=?', id);
     online.removeProfile(id);
@@ -191,26 +211,40 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
   });
   app.get('/api/health', async () => ({ ok: true, version: '0.1.0' }));
   app.get('/api/profiles', async req => db.all('SELECT * FROM profiles WHERE account_id=? ORDER BY created_at,id', req.moaAccount.id).map(toProfile));
+  app.post('/api/profiles/lock', async (req, reply) => { pins.lock(req, reply); return reply.code(204).send(); });
+  app.post('/api/profiles/:id/unlock', { schema: { params: idParams(), body: object({ pin: { type: 'string', pattern: '^[0-9]{4,8}$' } }, ['pin']) } }, async (req, reply) => {
+    const id = params(req).id;
+    if (!db.get('SELECT id FROM profiles WHERE id=? AND account_id=?', id, req.moaAccount.id)) throw new ApiFailure(404, 'profile-not-found');
+    await pins.unlock(id, (req.body as { pin: string }).pin, req, reply);
+    return reply.code(204).send();
+  });
   app.post('/api/profiles', { schema: { body: object(profileFields, ['name']) } }, async (req, reply) => {
-    const body = req.body as { name: string; color?: string; kids?: boolean; avatar?: string | null };
+    const body = req.body as { name: string; color?: string; kids?: boolean; avatar?: string | null; pin?: string | null };
+    const pinHash = body.pin ? await hashPin(body.pin) : null;
     const id = randomUUID();
     db.transaction(() => {
       const count = db.get('SELECT count(*) AS n FROM profiles WHERE account_id=?', req.moaAccount.id)!.n;
       if (count >= 5) throw new ApiFailure(409, 'profile-limit');
-      db.run('INSERT INTO profiles(id,name,color,kids,created_at,account_id,avatar) VALUES(?,?,?,?,?,?,?)', id, body.name.trim(), body.color || COLORS[count % COLORS.length], body.kids ? 1 : 0, now(), req.moaAccount.id, body.avatar ?? null);
+      db.run('INSERT INTO profiles(id,name,color,kids,created_at,account_id,avatar,pin_hash) VALUES(?,?,?,?,?,?,?,?)', id, body.name.trim(), body.color || COLORS[count % COLORS.length], body.kids ? 1 : 0, now(), req.moaAccount.id, body.avatar ?? null, pinHash);
       const navigation = db.defaultNavigation();
       if (navigation) db.run('INSERT INTO settings VALUES(?,?)', id, JSON.stringify({ navigation: db.availableNavigation(navigation) }));
     });
+    if (pinHash) pins.grant(id, req, reply);
     return reply.code(201).send(toProfile(db.get('SELECT * FROM profiles WHERE id=?', id)!));
   });
-  app.patch('/api/profiles/:id', { schema: { params: idParams(), body: object(profileFields) } }, async req => {
+  app.patch('/api/profiles/:id', { schema: { params: idParams(), body: object(profileFields) } }, async (req, reply) => {
     const id = params(req).id, old = db.get('SELECT * FROM profiles WHERE id=? AND account_id=?', id, req.moaAccount.id); if (!old) throw new ApiFailure(404, 'profile-not-found');
-    const body = req.body as Partial<Profile>;
-    db.run('UPDATE profiles SET name=?,color=?,kids=?,avatar=? WHERE id=?', body.name?.trim() ?? old.name, body.color ?? old.color, body.kids !== undefined ? Number(body.kids) : old.kids, body.avatar === undefined ? old.avatar : body.avatar, id);
+    pins.assert(id, req);
+    const body = req.body as Partial<Profile> & { pin?: string | null };
+    const pinHash = body.pin === undefined ? old.pin_hash : body.pin === null ? null : await hashPin(body.pin);
+    pins.assert(id, req);
+    db.run('UPDATE profiles SET name=?,color=?,kids=?,avatar=?,pin_hash=? WHERE id=?', body.name?.trim() ?? old.name, body.color ?? old.color, body.kids !== undefined ? Number(body.kids) : old.kids, body.avatar === undefined ? old.avatar : body.avatar, pinHash, id);
+    if (body.pin !== undefined) { pins.invalidate(id); pins.grant(id, req, reply); }
     return toProfile(db.get('SELECT * FROM profiles WHERE id=?', id)!);
   });
   app.delete('/api/profiles/:id', { schema: { params: idParams() } }, async (req, reply) => {
     if (!db.get('SELECT 1 FROM profiles WHERE id=? AND account_id=?', params(req).id, req.moaAccount.id)) throw new ApiFailure(404, 'profile-not-found');
+    pins.assert(params(req).id, req);
     await removeProfile(params(req).id);
     return reply.code(204).send();
   });
@@ -340,6 +374,21 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
     if (!db.get('SELECT id FROM episodes WHERE id=?',params(req).id)) throw new ApiFailure(404,'episode-not-found');
     return enrichment.remoteMarkers(params(req).id,(req.query as {duration:number}).duration);
   });
+  app.post('/api/subtitles/import', { bodyLimit: 14 * 1024 * 1024, schema: { body: object({ episodeId: string, filename: { type: 'string', minLength: 1, maxLength: 255 }, data: { type: 'string', minLength: 4, maxLength: 14 * 1024 * 1024 } }, ['episodeId', 'filename', 'data']) } }, async req => {
+    const body = req.body as { episodeId: string; filename: string; data: string };
+    return subtitleLibrary.import(body.episodeId, profile(req), body.filename, body.data);
+  });
+  app.get('/api/episodes/:id/subtitles/uploads', { schema: { params: idParams() } }, async req => subtitleLibrary.uploads(params(req).id, profile(req)));
+  app.get('/api/admin/subtitles', async (_req, reply) => reply.header('Cache-Control', 'private, no-store').send(subtitleLibrary.list()));
+  const savedSubtitleParams = object({ kind: { type: 'string', enum: ['upload', 'translation', 'online'] }, id: string }, ['kind', 'id']);
+  app.get('/api/admin/subtitles/:kind/:id/content', { schema: { params: savedSubtitleParams } }, async (req, reply) => {
+    const row = subtitleLibrary.content(params(req).kind as 'upload' | 'translation' | 'online', params(req).id);
+    return reply.type(row.format === 'ass' ? 'text/x-ssa; charset=utf-8' : 'text/vtt; charset=utf-8').header('Cache-Control', 'private, no-store').header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(row.name.replace(/\.[^.]+$/, '') + '.' + row.format)}`).send(row.content);
+  });
+  app.delete('/api/admin/subtitles/:kind/:id', { schema: { params: savedSubtitleParams } }, async (req, reply) => {
+    subtitleLibrary.remove(params(req).kind as 'upload' | 'translation' | 'online', params(req).id);
+    return reply.code(204).send();
+  });
   app.get('/api/episodes/:id/subtitles/online', { schema: { params: idParams(), querystring: object({ title: {type:'string',minLength:1,maxLength:500,pattern:'\\S'}, season: {type:'integer',minimum:1,maximum:99}, episode: {type:'number',minimum:0,maximum:10000}, episodeOffset: {type:'integer',minimum:0,maximum:10000} }) } }, async (req, reply) => {
     const controller = new AbortController();
     const abort = () => controller.abort();
@@ -372,6 +421,7 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
       ? await remotePlayback.create(profile(req), body.episodeId, body.startPosition, body.streamId)
       : await playback.create(profile(req), body.episodeId, body.capabilities, body.audioTrackId, body.startPosition);
     result.subtitles.push(...translations.tracks(body.episodeId, profile(req)));
+    result.subtitles.push(...subtitleLibrary.uploads(body.episodeId, profile(req)));
     return result;
   });
   app.post('/api/playback/:sessionId/heartbeat', { schema: { params: idParams('sessionId') } }, async (req, reply) => {
@@ -383,23 +433,25 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
     if (online.removeAsset(params(req).sessionId, profile(req))) return reply.code(204).send();
     playback.get(params(req).sessionId, profile(req)); await playback.remove(params(req).sessionId); return reply.code(204).send();
   });
-  app.get('/api/playback/:sessionId/remote/:asset', async (req, reply) => remotePlayback.proxy(req, reply, params(req).sessionId, params(req).asset));
+  casting.asset(app, '/api/playback/:sessionId/remote/:asset', async (req, reply) => remotePlayback.proxy(req, reply, params(req).sessionId, params(req).asset));
   const session = (req: FastifyRequest) => playback.get(params(req).sessionId, req.moaProfile);
-  app.get('/api/playback/:sessionId/index.m3u8', async (req, reply) => {
+  casting.asset(app, '/api/playback/:sessionId/index.m3u8', async (req, reply) => {
     const s = session(req); if (s.response.mode === 'direct') throw new ApiFailure(404, 'not-hls');
     return reply.type('application/vnd.apple.mpegurl').header('Cache-Control', 'no-store').send(playback.playlist(s));
   });
-  app.get('/api/playback/:sessionId/original', async (req, reply) => {
+  casting.asset(app, '/api/playback/:sessionId/original', async (req, reply) => {
     const s = session(req); if (s.response.mode !== 'direct') throw new ApiFailure(404, 'not-direct');
     const safe = await safePath(cfg.mediaRoot, s.file); return sendFile(reply, safe, s.response.mime, req.headers.range);
   });
-  app.get('/api/playback/:sessionId/:asset', async (req, reply) => {
+  casting.asset(app, '/api/playback/:sessionId/:asset', async (req, reply) => {
     const s = session(req), asset = params(req).asset, match = /^(seg-(\d+)\.m4s|init\.mp4)$/.exec(asset);
     if (!match || s.response.mode === 'direct') throw new ApiFailure(404, 'not-found');
     const file = asset === 'init.mp4' ? await playback.initialization(s) : await playback.segment(s, Number(match[2]));
     return sendFile(reply.header('Cache-Control', 'private, max-age=1800'), file, 'video/mp4');
   });
   app.get('/api/playback/:sessionId/subtitles/:track', async (req, reply) => {
+    const uploaded = subtitleLibrary.asset(params(req).sessionId, params(req).track, req.moaProfile);
+    if (uploaded) return reply.type(uploaded.format === 'ass' ? 'text/x-ssa; charset=utf-8' : 'text/vtt; charset=utf-8').header('Cache-Control', 'private, no-store').send(uploaded.content);
     const translated = translations.asset(params(req).sessionId, params(req).track, req.moaProfile);
     if (translated) return reply.type(translated.format === 'ass' ? 'text/x-ssa; charset=utf-8' : 'text/vtt; charset=utf-8').header('Cache-Control', 'private, no-store').send(translated.content);
     if (remotePlayback.sessions.has(params(req).sessionId)) {

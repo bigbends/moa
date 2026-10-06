@@ -1,6 +1,6 @@
 import { GroupedSearch } from '../components/GroupedFeed';
 import { hasLoginGate } from "../lib/api";
-import { Bookmark, ChevronRight, FolderOpen, History, LogOut, Search as SearchIcon, Settings, Users, UsersRound, X } from "lucide-react";
+import { Bookmark, ChevronRight, FolderOpen, History, LogOut, Puzzle, Search as SearchIcon, Settings, Subtitles, Users, UsersRound, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -118,6 +118,8 @@ export function MePage() {
         {link("/my-list", <Bookmark size={20} />, "내 목록")}
         {admin && link("/sources", <FolderOpen size={20} />, "영상 소스")}
         {admin && link("/library", <FolderOpen size={20} />, "라이브러리 관리")}
+        {link("/plugins", <Puzzle size={20} />, "플러그인")}
+        {admin && link("/subtitles", <Subtitles size={20} />, "저장한 자막")}
         {admin && hasLoginGate && link("/accounts", <Users size={20} />, "계정과 초대")}
         {link("/settings", <Settings size={20} />, "설정")}
         {hasLoginGate && <button className="me-link" onClick={() => void logout()}><LogOut size={20} /><span>로그아웃{me.data && <small> · {me.data.username}</small>}</span><ChevronRight size={18} /></button>}

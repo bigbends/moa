@@ -1,6 +1,6 @@
 # 개발과 검증
 
-Node.js 22.13 이상, Corepack과 저장소의 고정 pnpm을 사용한다.
+Node.js 22.13 이상, Corepack과 저장소의 고정 pnpm을 사용한다. 압축 자막에는 `bsdtar`가 필요하다(macOS 기본 제공, Debian/Ubuntu는 `libarchive-tools`). 배포 이미지에는 포함된다.
 
 ```sh
 corepack pnpm install --frozen-lockfile

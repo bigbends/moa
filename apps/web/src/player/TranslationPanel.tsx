@@ -179,7 +179,7 @@ export function TranslationView({ tracks, current, state, appliedId, jimaku, tim
       )}
       {state.status === "failed" && <p className="panel-note note-warn translate-error" role="alert"><CircleAlert size={16} /><span>{state.message}{state.job?.track ? " 번역된 부분은 그대로 볼 수 있어요." : ""}</span></p>}
       {candidates.length ? <>{own}{jimakuBlock}</> : <>{jimakuBlock}{own}</>}
-      <p className="panel-note">Gemini AI로 번역하며 API 사용료가 발생할 수 있어요. 번역한 자막은 저장돼 다시 열 때 비용이 들지 않아요.</p>
+      <p className="panel-note">설정한 AI 서비스로 번역하며 API 사용료가 발생할 수 있어요. 번역한 자막은 저장돼 다시 열 때 비용이 들지 않아요.</p>
       <div className="translate-actions">
         <Button variant="primary" icon={<Languages size={16} />} disabled={!picked || reading} onClick={start}>{state.status === "failed" ? "다시 시도" : "번역 시작"}</Button>
       </div>
@@ -301,7 +301,7 @@ export function TranslationOfferCard({ offer, onAccept, onChoose, onDismiss }: {
         <b>한국어 자막이 없어요</b>
         <p>{text}</p>
         {offer.kind === "jimaku" && <small className="translate-offer-file">{offer.source.label}</small>}
-        {offer.kind !== "choose" && <small>자막 내용이 Gemini로 전송되고 사용료가 발생할 수 있어요</small>}
+        {offer.kind !== "choose" && <small>자막 내용이 설정한 AI 서비스로 전송되고 사용료가 발생할 수 있어요</small>}
         <div className="translate-offer-actions">
           {offer.kind !== "choose"
             ? <><Button variant="primary" icon={<Languages size={16} />} data-remote-entry onClick={onAccept}>번역하기</Button><Button variant="ghost" onClick={onChoose}>다른 자막</Button></>

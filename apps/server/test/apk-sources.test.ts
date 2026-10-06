@@ -37,7 +37,7 @@ test('APK factory identity, original filters, episode numbers, preferences and p
     db.run('INSERT INTO profiles(id,name,color,kids,created_at) VALUES(?,?,?,?,?)','p','p','blue',0,'2026');
     const list=await sources.refresh(repo,'aniyomi-apk');assert.equal(list.length,2);assert.equal(list[0].kind,'aniyomi-apk');
     const a=list.find(s=>s.name==='애니 A')!,b=list.find(s=>s.name==='영화 B')!;
-    assert.match(a.iconUrl!,/^\/api\/images\/source-/);assert.equal(a.iconUrl,b.iconUrl);
+    assert.match(a.iconUrl!,/^\/api\/images\/source-/);assert.notEqual(a.iconUrl,b.iconUrl);
     assert.equal(db.get('SELECT url FROM source_images')!.url,'https://repo.test/icon/test.factory.png');
     await sources.install(a.id);await sources.install(b.id);
     assert.equal(sources.row(a.id).code,'@aniyomi-apk');assert.equal(sources.row(b.id).type,'movie');
@@ -50,7 +50,7 @@ test('APK factory identity, original filters, episode numbers, preferences and p
     assert.equal(page.items.length,1);assert.equal(page.items[0].provider.kind,'aniyomi-apk');
     await sources.detail(page.items[0].id);const detail=catalog.detail(page.items[0].id,'p');const ep=detail.seasons[0].episodes[0];assert.equal(ep.number,13);
     const movie=await sources.browse(b.id,'p');await sources.detail(movie.items[0].id);assert.equal(catalog.detail(movie.items[0].id,'p').seasons[0].episodes[0].title,'본편');
-    const fields=await sources.preferences(a.id);assert.equal(fields.length,1);assert.equal(fields[0].value,'ko');
+    const fields=await sources.preferences(a.id);assert.equal(fields.length,2);assert.equal(fields[0].value,'ko');
     await assert.rejects(sources.preferences(a.id,{'["102","lang"]':'ko'}),/invalid-source-preference/);
     await sources.preferences(a.id,{'["101","lang"]':'en'});
     const session=await remote.create('p',ep.id);assert.equal(remote.get(session.sessionId).apkLease,lease);assert.ok(!session.url.includes(APK_RELAY));
