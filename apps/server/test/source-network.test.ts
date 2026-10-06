@@ -22,7 +22,9 @@ test('host source network is isolated, defaults off, preserves reinstall, and sc
   class Browser extends SourceBrowser {
     constructor(){ super({}); }
     override get configured(){ return true; }
+    override async evaluate(scope:string,proxy:string|undefined,input:any){ browserCalls.push({scope,proxy,url:input.url,headers:input.headers}); return Buffer.from('browser-image').toString('base64'); }
   }
+  const browserCalls:any[]=[];
   const sources = new Sources(db,catalog,async input=>{
     seen.push(input);
     assert.ok(!Object.hasOwn(input.preferences||{},'__moa_proxy') && !Object.hasOwn(input.preferences||{},'__moa_browser'));
@@ -70,6 +72,12 @@ test('host source network is isolated, defaults off, preserves reinstall, and sc
     const id=page.items[0].poster!.split('/').at(-1)!;
     assert.equal((await sources.imageContent(id,async (_input,_signal,_allow,_limit,selected)=>{assert.equal(selected,proxy);return {bytes:Buffer.from('image'),headers:{},statusCode:200,contentType:'image/png'};})).toString(),'image');
   }
+  const denied=async()=>({bytes:Buffer.from('challenge'),headers:{},statusCode:403,contentType:'text/html'});
+  const aImage=a.items[0].poster!.split('/').at(-1)!,bImage=b.items[0].poster!.split('/').at(-1)!;
+  assert.equal((await sources.imageContent(aImage,denied)).toString(),'browser-image','browser-enabled sources retry blocked images in their session');
+  assert.deepEqual(browserCalls,[{scope:'a',proxy:ownProxy,url:'https://source.test/poster.png',headers:{Referer:'https://source.test/'}}]);
+  await assert.rejects(sources.imageContent(bImage,denied),{message:'image-unavailable'});
+  assert.equal(browserCalls.length,1,'sources without the browser option keep plain image failures');
   await sources.detail(a.items[0].id);
   const episode=db.get('SELECT id FROM episodes WHERE media_id=?',a.items[0].id)!.id;
   const session=await remote.create('p',episode);
