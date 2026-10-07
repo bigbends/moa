@@ -24,6 +24,7 @@ test('publisher creates only allowlisted public artifacts; signed bundle boots t
   await writeFile(path.join(cwd,'deploy/release-policy.json'),JSON.stringify({version:'v1.0.0-beta.1',minimumVersion:'v0.1.0',schemaEpoch:1,rollbackSafe:true}));
   const pair=generateKeyPairSync('ed25519');
   const publicKey=pair.publicKey.export({type:'spki',format:'pem'});
+  await writeFile(path.join(cwd,'deploy/release-trust.json'),JSON.stringify({algorithm:'Ed25519',publicKey}));
   const env={...process.env,RELEASE_TAG:'v1.0.0-beta.1',GITHUB_REPOSITORY:'fixture-owner/moa',GITHUB_SHA:'b'.repeat(40),RELEASE_PRIVATE_KEY:pair.privateKey.export({type:'pkcs8',format:'pem'}),RELEASE_PUBLIC_KEY:publicKey,RELEASE_OUTPUT:path.join(cwd,'output')};
   await exec(process.execPath,[path.join(source,'scripts/publish-release.mjs')],{cwd,env});
   assert.equal(verify(null, await readFile(path.join(cwd,'output/moa-install.tar.gz')), publicKey, await readFile(path.join(cwd,'output/moa-install.tar.gz.sig'))), true);

@@ -79,7 +79,10 @@ test('expired clearance authenticates again; other expired cookies never reach t
   assert.equal(f.authentications(), 1); assert.deepEqual(sent, ['session=private']);
   now += 31 * 60_000;
   await f.sessions.request('source', undefined, input(), signal());
-  assert.equal(f.authentications(), 2, 'idle session state expires even for session cookies');
+  assert.equal(f.authentications(), 1, 'idle session is retained beyond the former 30-minute limit');
+  now += 61 * 60_000;
+  await f.sessions.request('source', undefined, input(), signal());
+  assert.equal(f.authentications(), 2, 'idle session state expires after one hour even for session cookies');
 });
 
 test('source, proxy and origin isolate cookies; clear discards only the selected source', async t => {

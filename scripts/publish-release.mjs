@@ -14,6 +14,8 @@ if (policy.version !== tag || typeof policy.rollbackSafe !== 'boolean') throw ne
 const output = path.resolve(process.env.RELEASE_OUTPUT || 'release-output');
 await mkdir(output, { recursive: true });
 const publicKey = process.env.RELEASE_PUBLIC_KEY;
+const trust = JSON.parse(await readFile('deploy/release-trust.json', 'utf8'));
+if (trust.algorithm !== 'Ed25519' || createPublicKey(publicKey).export({ type: 'spki', format: 'pem' }) !== createPublicKey(trust.publicKey).export({ type: 'spki', format: 'pem' })) throw new Error('Configured public key differs from reviewed release trust key');
 const key = createPrivateKey(process.env.RELEASE_PRIVATE_KEY);
 if (key.asymmetricKeyType !== 'ed25519' || createPublicKey(key).export({ type: 'spki', format: 'pem' }) !== createPublicKey(publicKey).export({ type: 'spki', format: 'pem' })) throw new Error('Release signing key mismatch');
 const files = {};

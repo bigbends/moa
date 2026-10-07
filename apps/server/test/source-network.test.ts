@@ -143,7 +143,7 @@ test('unconfigured JS browser is disabled; APK host proxy never enters guest pre
   sources.saveNetwork(defaultProxy,0);
   const browser=(await sources.preferences('js')).find(p=>p.key==='__moa_browser')!;
   assert.equal(browser.value,false);assert.equal(browser.disabled,true);assert.ok(browser.summary);
-  assert.equal(browser.title,'소스 브라우저 사용 - 실험');
+  assert.equal(browser.title,'브라우저 인증 사용');
   await assert.rejects(sources.preferences('js',{__moa_browser:true}),/source-browser-unavailable/);
   assert.equal(db.get('SELECT browser FROM source_network WHERE source_id=?','js'),undefined);
   const apkFields=await sources.preferences('apk',{language:'en',__moa_proxy:ownProxy});
