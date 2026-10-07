@@ -447,12 +447,22 @@ export interface SourceRemovalResult { removedIds: string[]; impact: SourceRemov
 export interface DefaultNavigation { navigation: NavigationTab[] | null }
 export type DefaultNavigationUpdate = DefaultNavigation | { fromProfile: true };
 
+export interface UpdatePolicy {
+  channel: 'stable' | 'beta'; autoCheck: boolean; autoApply: boolean;
+  intervalHours: number; timezone: string; windowStart: string; windowEnd: string;
+}
+export interface UpdateHistory {
+  version: string; previous: string; at: number; outcome: 'complete' | 'rolled-back' | 'failed';
+}
 export interface UpdateStatus {
   configured: boolean; connected: boolean;
-  state: 'idle' | 'checking' | 'updating' | 'current' | 'available' | 'blocked' | 'failed' | 'restart-required';
-  mode: 'git' | 'docker' | null;
+  state: 'idle' | 'checking' | 'updating' | 'current' | 'available' | 'blocked' | 'failed' | 'restart-required'
+    | 'downloading' | 'preflight' | 'waiting' | 'backup' | 'applying' | 'verifying' | 'rolling-back' | 'rolled-back' | 'recovery-required';
+  mode: 'git' | 'docker' | 'release' | null;
   current: string; latest: string | null; branch: string | null;
   behind: number; ahead: number; checkedAt: number | null; error: string | null;
+  policy?: UpdatePolicy; nextCheckAt?: number | null; notesUrl?: string | null;
+  updaterVersion?: string; history?: UpdateHistory[]; deferredReason?: 'busy' | 'offline' | 'outside-window' | null;
 }
 
 /* ---------- Gemini subtitle translation ---------- */

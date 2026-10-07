@@ -36,3 +36,8 @@ blob-report/
 /.audit/
 /apps/server/scripts/.audit-before.ts
 **/__pycache__/
+
+# Host release state can contain resolved secrets and local backups.
+.moa-release/
+release-output/
+release-digests/

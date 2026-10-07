@@ -1,0 +1,57 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import path from 'node:path';
+import { tmpdir } from 'node:os';
+import { install } from './install-release.mjs';
+import { BUNDLE_FILES } from './release-bundle.mjs';
+import { SERVICES } from './release.mjs';
+
+test('fresh release installation pins components, fetches the gateway, preserves env and sets up IPC permissions', async t => {
+  const cwd = await mkdtemp(path.join(tmpdir(), 'moa-installer-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const key = path.join(cwd, 'fixture-key'); await writeFile(key, 'fixture');
+  await writeFile(path.join(cwd, '.env'), 'PUBLIC_HOST=custom.example\n');
+  const commands = [];
+  const manifest = { version: 'v1.0.0', schemaEpoch: 1, minimumUpdaterVersion: '1.0.0', minimumComposeVersion: '2.24.0', services: Object.fromEntries(SERVICES.map(n => [n,{image:`ghcr.io/sidetool/${n}`,digest:`sha256:${'a'.repeat(64)}`,platforms:['linux/amd64','linux/arm64']}])) };
+  const files = Object.fromEntries(BUNDLE_FILES.map(n => [n, n === '.env.example' ? 'PUBLIC_HOST=default\n' : 'synthetic public fixture\n']));
+  const config = { name: 'moa-fixture', services: { moa: { image:'old',environment:{LITERAL:'cost$5'},volumes:[{type:'volume',source:'synthetic-data',target:'/data'}] }, 'moa-auth':{ image:'old',volumes:[{type:'volume',source:'synthetic-auth',target:'/data'}]}, 'moa-gateway':{image:'nginx:fixture',volumes:[{type:'bind',source:'/incorrect/base/path',target:'/etc/nginx/templates/default.conf.template'}]} } };
+  const run = async (command,args) => {
+    commands.push([command,...args]);
+    if(args[0]==='ps')return '';
+    if(args.join(' ')==='compose version --short')return '2.30.0';
+    if(args.includes('--format'))return JSON.stringify(config);
+    return '';
+  };
+  const feed = { async releases(){return[{tag_name:'v1.0.0'}];},async manifest(){return{manifest};},async bundle(){return{format:1,files};} };
+  await install(['install','--cwd',cwd,'--project','moa-fixture','--version','v1.0.0','--key',key],{feed,run});
+  const current=JSON.parse(await readFile(path.join(cwd,'.moa-release/current.json'),'utf8'));
+  const resolved=JSON.parse(await readFile(current.compose,'utf8'));
+  assert.deepEqual(current.services,['moa','moa-auth']);
+  assert.equal(resolved.services.moa.environment.LITERAL,'cost$$5');
+  assert.equal(resolved.services.moa.environment.MOA_DEPLOYMENT,'release');
+  assert.match(resolved.services.moa.image,/@sha256:/);
+  assert.equal(resolved.services['moa-gateway'].volumes[0].source,path.join(current.runtime,'deploy/gateway/default.conf.template'));
+  assert.equal(await readFile(path.join(cwd,'.env'),'utf8'),'PUBLIC_HOST=custom.example\n');
+  assert.match(await readFile(path.join(cwd,'moa-updater.service'),'utf8'),/UMask=0007/);
+  assert.ok(commands.some(c=>c.includes('pull')&&c.includes('nginx:fixture')));
+  assert.ok(commands.every(c=>!c.includes('build')&&!c.includes('down')));
+  assert.equal(JSON.parse(await readFile(path.join(cwd,'.moa-release/policy.json'),'utf8')).autoApply,false);
+  await assert.rejects(install(['install','--cwd',cwd,'--version','v1.0.0','--key',key],{feed,run}),/update-already-installed/);
+});
+
+test('adoption refuses a running local build before making deployment changes',async t=>{
+  const cwd=await mkdtemp(path.join(tmpdir(),'moa-adoption-'));t.after(()=>rm(cwd,{recursive:true,force:true}));
+  const key=path.join(cwd,'key');await writeFile(key,'fixture');const commands=[];
+  const manifest={minimumUpdaterVersion:'1.0.0',services:{moa:{image:'ghcr.io/sidetool/moa',digest:`sha256:${'a'.repeat(64)}`}}};
+  const feed={async releases(){return[{tag_name:'v1.0.0'}];},async manifest(){return{manifest};}};
+  const run=async(command,args)=>{
+    commands.push([command,...args]);
+    if(args.includes('config'))return JSON.stringify({name:'existing',services:{moa:{image:'local:custom'}}});
+    if(args.includes('ps'))return JSON.stringify([{Service:'moa',ID:'fixture'}]);
+    if(args[0]==='image')return '[]';return 'sha256:synthetic';
+  };
+  await assert.rejects(install(['adopt','--cwd',cwd,'--version','v1.0.0','--key',key],{feed,run}),/update-deployment-diverged/);
+  assert.ok(commands.every(c=>!['up','pull','stop','cp'].some(x=>c.includes(x))));
+  await assert.rejects(readFile(path.join(cwd,'.moa-release/installation.json')),e=>e.code==='ENOENT');
+});

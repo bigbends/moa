@@ -1,5 +1,6 @@
 import { registerWebsitePlugins } from './website-plugins.js';
 import { registerUpdates } from './updates.js';
+import { UpdateMaintenance } from './update-maintenance.js';
 import { Casting } from './casting.js';
 import { SubtitleLibrary } from './subtitle-library.js';
 import { RemoteAccess, connectorRpc } from './remote-access.js';
@@ -105,6 +106,10 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
   const library = new Library(db, cfg, message => app.log.warn(message), () => enrichment.schedule());
   const playback = new Playback(db, catalog, cfg, value => app.log.info(value), online, enrichment);
   const casting = new Casting(db, (id, profile) => remotePlayback.sessions.has(id) ? remotePlayback.get(id, profile) : playback.get(id, profile));
+  const updateMaintenance = new UpdateMaintenance(process.env.MOA_UPDATER_DIR, () =>
+    playback.sessions.size > 0 || remotePlayback.sessions.size > 0 || library.status.running || translations.updaterBusy ||
+    Boolean(db.get("SELECT 1 FROM skip_analysis_jobs WHERE status='running' LIMIT 1")));
+  updateMaintenance.register(app);
   /** Give TMDB a moment to link new titles so first visits already show its artwork. */
   const withMetadata = async <T extends { items: { id: string }[] }>(page: T, profileId: string): Promise<T> => {
     const unlinked = page.items.map(c => c.id).filter(id => !db.get('SELECT 1 FROM tmdb_links WHERE media_id=?', id));
@@ -506,7 +511,7 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
   });
   // Periodic scans reuse the same incremental scan path; disabled with 0 for tests.
   const interval = Math.max(0, Number(process.env.MOA_SCAN_INTERVAL_MS ?? 6 * 60 * 60 * 1000));
-  const scanTimer = interval > 0 ? setInterval(() => library.start(), interval) : undefined; scanTimer?.unref();
+  const scanTimer = interval > 0 ? setInterval(() => { if (!updateMaintenance.paused) library.start(); }, interval) : undefined; scanTimer?.unref();
   app.addHook('onReady', async () => { await remoteAccess.init(); enrichment.schedule(); void tmdb.backfill().catch(error => app.log.warn({ event: 'tmdb-backfill-error', error: String(error) })); });
   app.addHook('onClose', async () => { remoteAccess.close(); clearInterval(cacheStatsTimer); await imageCache.close(); if (scanTimer) clearInterval(scanTimer); await franchises.close(); tmdb.close(); await jimaku.close(); await translations.close(); online.close(); remotePlayback.close(); await sources.close(); await library.pending; await enrichment.close(); await playback.close(); db.close(); });
   return { app, db, sources, remotePlayback, catalog, library, playback, online, translations, jimaku, enrichment, config: cfg };

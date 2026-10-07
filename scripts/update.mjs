@@ -4,11 +4,14 @@ import { mkdir, readFile, writeFile, rename, rm, lstat, realpath } from 'node:fs
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { ReleaseUpdater } from './release-updater.mjs';
+import { policy, UPDATER_VERSION } from './release.mjs';
 
 const exec = promisify(execFile);
 const blank = () => ({ configured: true, connected: true, state: 'idle', mode: null, current: 'unknown', latest: null, branch: null, behind: 0, ahead: 0, checkedAt: null, error: null });
 const fail = code => { throw new Error(code); };
 const errors = new Set(['update-dirty', 'update-diverged', 'update-deployment-diverged', 'update-version-unknown', 'update-no-upstream', 'update-not-installed', 'update-git-failed', 'update-docker-failed', 'update-build-failed', 'update-restart-failed', 'update-busy', 'update-request-invalid', 'update-invalid-options']);
+for (const code of ['manifest-invalid','signature-invalid','invalid-version','invalid-policy','download-invalid','download-failed','rate-limited','response-limit','feed-truncated','release-incomplete','bundle-invalid','release-mutated','state-invalid','migration-required','platform-unsupported','tool-required','compose-required','no-releases','space-required','backup-unavailable','app-busy','health-failed','lease-lost','recovery-required','rolled-back']) errors.add(`update-${code}`);
 const publicError = error => errors.has(error?.message) ? error.message : 'update-failed';
 const jsonLines = text => text.trim().startsWith('[') ? JSON.parse(text) : text.trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
 const atomic = async (file, value, mode) => {
@@ -20,17 +23,21 @@ const atomic = async (file, value, mode) => {
 
 export class Updater {
   constructor({ cwd = process.cwd(), dir = path.join(cwd, 'data/updater'), mode = 'auto', service = process.env.MOA_UPDATE_SERVICE, run } = {}) {
-    if (!['auto', 'git', 'docker'].includes(mode) || service && !/^[A-Za-z0-9][A-Za-z0-9_.@-]*\.service$/.test(service)) fail('update-invalid-options');
+    if (!['auto', 'source', 'release', 'git', 'docker'].includes(mode) || service && !/^[A-Za-z0-9][A-Za-z0-9_.@-]*\.service$/.test(service)) fail('update-invalid-options');
     this.cwd = path.resolve(cwd);
     this.dir = path.resolve(dir);
-    this.mode = mode;
+    this.mode = mode === 'source' ? 'auto' : mode;
+    this.sourceOnly = mode === 'source';
+    if (mode === 'release') this.release = new ReleaseUpdater(this);
     this.service = service;
     this.run = run || (async (command, args, timeout = 120000) => (await exec(command, args, { cwd: this.cwd, timeout, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout.trim());
     this.state = blank();
   }
   async persist() {
     await mkdir(this.dir, { recursive: true, mode: 0o770 });
-    await atomic(path.join(this.dir, 'status.json'), { ...this.state, heartbeat: Date.now() }, 0o640);
+    const snapshot = { ...this.state, heartbeat: Date.now() };
+    this.persisting = (this.persisting ?? Promise.resolve()).catch(() => {}).then(() => atomic(path.join(this.dir, 'status.json'), snapshot, 0o640));
+    await this.persisting;
   }
   async git(args) { try { return await this.run('git', args); } catch { fail('update-git-failed'); } }
   async docker(args, timeout) { try { return await this.run('docker', ['compose', ...args], timeout); } catch { fail('update-docker-failed'); } }
@@ -42,6 +49,7 @@ export class Updater {
       try { docker = Boolean(await this.run('docker', ['compose', 'ps', '--quiet', 'moa'])); } catch {}
     }
     if (this.mode === 'git') docker = false;
+    if (this.sourceOnly && !git) fail('update-not-installed');
     if (!git && !docker) fail('update-not-installed');
     this.state.mode = docker ? 'docker' : 'git';
     return { git, docker };
@@ -114,6 +122,7 @@ export class Updater {
     return this.state.behind > 0;
   }
   async check() {
+    if (this.release) return this.release.check();
     const restart = this.state.state === 'restart-required';
     this.state = { ...blank(), state: 'checking' };
     await this.persist();
@@ -123,6 +132,7 @@ export class Updater {
     return installation;
   }
   async apply() {
+    if (this.release) return this.release.apply();
     const installation = await this.check();
     if (this.state.state !== 'available') return;
     this.state.state = 'updating';
@@ -155,7 +165,7 @@ export class Updater {
     try { await this[action](); }
     catch (error) {
       const code = publicError(error);
-      this.state.state = ['update-dirty', 'update-diverged', 'update-no-upstream', 'update-deployment-diverged', 'update-version-unknown'].includes(code) ? 'blocked' : 'failed';
+      this.state.state = this.state.state === 'recovery-required' ? 'recovery-required' : ['update-dirty', 'update-diverged', 'update-no-upstream', 'update-deployment-diverged', 'update-version-unknown', 'update-migration-required', 'update-platform-unsupported', 'update-tool-required', 'update-compose-required', 'update-no-releases', 'update-release-incomplete'].includes(code) ? 'blocked' : 'failed';
       this.state.error = code;
       this.state.checkedAt = Date.now();
     }
@@ -167,9 +177,9 @@ export class Updater {
     let request;
     try {
       const info = await lstat(file);
-      if (!info.isFile() || info.size > 1024) fail('update-request-invalid');
+      if (!info.isFile() || info.size > 4096) fail('update-request-invalid');
       request = JSON.parse(await readFile(file, 'utf8'));
-      if (!['check', 'apply'].includes(request.action) || !/^[a-f0-9-]{36}$/.test(request.id) || !Number.isSafeInteger(request.createdAt) || Math.abs(Date.now() - request.createdAt) > 60000 || Object.keys(request).some(key => !['id', 'action', 'createdAt'].includes(key))) fail('update-request-invalid');
+      if (!['check', 'apply', 'configure'].includes(request.action) || !/^[a-f0-9-]{36}$/.test(request.id) || !Number.isSafeInteger(request.createdAt) || Math.abs(Date.now() - request.createdAt) > 60000 || Object.keys(request).some(key => !(request.action === 'configure' ? ['id', 'action', 'createdAt', 'policy'] : ['id', 'action', 'createdAt']).includes(key))) fail('update-request-invalid');
     } catch (error) {
       if (error.code === 'ENOENT') return;
       await rm(file, { force: true }).catch(() => {});
@@ -178,11 +188,16 @@ export class Updater {
       return;
     }
     await rm(file);
-    await this.perform(request.action);
+    if (request.action === 'configure') {
+      try { if (!this.release) fail('update-invalid-options'); await this.release.configure(policy(request.policy)); }
+      catch { this.state.error = 'update-invalid-policy'; }
+      await this.persist();
+    } else await this.perform(request.action);
   }
 }
 
 export async function main(args = process.argv.slice(2)) {
+  if (args.length === 1 && args[0] === 'probe') { const result = { protocol: 1, version: UPDATER_VERSION }; process.stdout.write(`${JSON.stringify(result)}\n`); return result; }
   const [action, ...flags] = args;
   if (!['check', 'apply', 'serve'].includes(action) || flags.length % 2) fail('update-invalid-options');
   const options = {};
@@ -213,13 +228,15 @@ export async function main(args = process.argv.slice(2)) {
       process.stdout.write(`${JSON.stringify(result)}\n`);
       return result;
     }
+    if (updater.release) await updater.release.init();
     heartbeat = setInterval(() => void updater.persist().catch(() => { running = false; }), 5000);
-    await updater.perform('check');
-    while (running) { await updater.consume(); await new Promise(resolve => setTimeout(resolve, 1000)); }
+    if (updater.state.state !== 'recovery-required' && (!updater.release || updater.release.policy.autoCheck && Date.now() >= updater.release.nextCheckAt)) await updater.perform('check');
+    while (running && !updater.restartRequested) { await updater.consume(); if (updater.release) await updater.release.tick(); await new Promise(resolve => setTimeout(resolve, 1000)); }
   } finally {
     clearInterval(heartbeat);
     process.removeListener('SIGTERM', stop);
     process.removeListener('SIGINT', stop);
+    if (updater.restartRequested) process.exitCode = 75;
     updater.state.connected = false;
     await updater.persist();
     await rm(lock, { force: true });

@@ -63,6 +63,7 @@ const digest = (text: string) => createHash('sha256').update(text).digest('hex')
 
 /** Manual, shared work queue. Only validated cue text is sent to Gemini. */
 export class Translations {
+  get updaterBusy() { return this.work.size > 0 || this.testingKeys.size > 0 || [...this.jobs.values()].some(job => job.state === 'queued' || job.state === 'running'); }
   private secret: Secret;
   private filename: string;
   private jobs = new Map<string, Job>();
