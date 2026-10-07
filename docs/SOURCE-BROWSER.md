@@ -1,137 +1,115 @@
 # Per-source proxy and experimental source browser
 
-The standalone Firefox service supplies HTML/JS callbacks to MOA's existing JS
-source runtime. It does not replace the APK container or relay media. Default
-installation is unchanged: this service runs only when its compose override is
-explicitly included. Source preferences must also enable the browser for the
-desired source; that preference defaults to false. A blank source proxy uses
-MOA's global/default proxy. The host selects both source ID and proxy; extension
-scripts cannot choose either.
+This optional Camoufox service supplies browser callbacks and authentication to
+MOA's JS sources. The existing source **Connection** settings remain unchanged:
+per-source proxy (blank inherits the server proxy), and **Use source browser -
+experimental** (default off). APK requests and sources without this option keep
+their existing behavior. No browser port is published and no media relay is replaced.
 
-The existing source settings screen has a **Connection** section below the
-extension's own preferences:
+## Session HTTP and lifecycle
 
-- **Per-source proxy** (text): leave blank to inherit the server global proxy;
-  otherwise enter an `http://`, `https://` or `socks5://` address. The value is
-  stored separately from guest preferences and applies to source runtime calls,
-  image fetches and remote playback. Repository and JS-code downloads retain the
-  server default proxy. APK package downloads use the selected source proxy.
-- **Use source browser - experimental** (boolean, opt-in, default off): shown only for
-  non-APK JS sources and disabled when the server has no source-browser service
-  configured. Only extensions that explicitly call the WebView API use it;
-  ordinary HTTP requests are not automatically redirected through a browser.
-  Enabling it requires the deploy override below.
+MOA keeps authentication cookies and the actual browser User-Agent in host memory,
+separately from the browser/Python process. The host scopes sessions by installed
+source, source settings generation, selected proxy and exact HTTPS origin. Source
+credentials are currently configured per installed source, shared by viewing
+profiles; this feature does not introduce per-profile website accounts.
 
-The proxy option is also available for APK sources. Their existing WebView
-implementation is unchanged. Without an override, existing requests continue
-to use the server default proxy and JS browser support remains off.
+At most 64 HTTP sessions are retained, with 30 minutes of inactivity expiry and
+bounded cookie count/size. Nothing is written to the database or disk. MOA restart
+requires fresh authentication. Preferences, proxy changes, removal, disabling,
+installation and rollback invalidate the applicable authentication state. Requests
+finishing after invalidation cannot restore the obsolete credentials.
+
+Opted-in sources can explicitly request the session HTTP path:
+
+```js
+const client = new Client({
+  timeout: 85,
+  browserSession: { url: 'https://example.com/catalogue', readOnly: true }
+});
+const response = await client.get('https://example.com/catalogue');
+```
+
+`url` is a public HTTPS bootstrap page on the same origin as the request. GET and
+HEAD are reads; POST additionally requires `readOnly: true` and must only be used
+by the source for a known read operation. PUT/PATCH/DELETE are not allowed on this
+path. Normal Client calls keep their existing transport. WebView scripts retain
+their existing meaning; they are not automatically translated into HTTP.
+
+The first session request authenticates via the browser. Subsequent requests use
+the existing pinned Node HTTP transport with cookies selected for each redirect
+hop. Set-Cookie updates are consumed by the host and not returned to guest code.
+Cross-origin redirects never receive the origin's credentials. An explicit CF
+challenge permits one coalesced authentication refresh and one retry. Ordinary
+403/401/429/5xx and ambiguous transport failures do not replay POST. A failed
+refresh has a 30-second cooldown. Cancelling one waiter does not cancel others;
+when all waiters cancel, authentication is aborted. The private source handles
+site-specific AJAX nonce expiry independently, without forcing CF authentication.
+
+Owner images use the same session when the referer and image origin agree.
+Existing browser image fallback remains available. Video DOM/JS extraction stays
+on the browser path; playback continues through MOA's existing media relay.
+
+Browser contexts are limited to two, serialized per source generation/proxy/origin.
+Idle contexts close after 30 seconds (a 10-second reaper cadence). Once no contexts,
+active requests, queued requests or cleanup operations remain, the entire Python
+process group is stopped. Auth state stays in MOA; HTTP requests do not keep the
+browser alive. The next browser operation starts a new worker. This reduces idle
+process memory; peak authentication memory and file cache are separate costs.
+
+## Deployment and rollback
 
 ```sh
 docker compose -f compose.yaml -f compose.source-browser.yaml build moa moa-source-browser
 docker compose -f compose.yaml -f compose.source-browser.yaml up -d
 ```
 
-The override uses a separate local main-app image so startup cannot silently
-pull an older published app without the browser client. It receives
-`MOA_SOURCE_BROWSER_URL=http://moa-source-browser:8799` and
-`MOA_SOURCE_BROWSER_SECRET_FILE=/run/moa-source-browser/token`. The service
-creates a 0600 random token in a dedicated volume; MOA mounts it read-only.
-For a bind mount, set `MOA_SOURCE_BROWSER_SECRET_PATH` to a directory writable
-by UID 1000 and readable by the app. No host port or gateway route is added.
-Stop using the override and disable source browser preferences to opt out.
+Preserve any other overrides already used by the installation. The override uses
+a separate local app image and sets `MOA_SOURCE_BROWSER_URL` and the shared
+`MOA_SOURCE_BROWSER_SECRET_FILE`. A dedicated volume holds the 0600 random RPC
+token; MOA mounts it read-only. For a bind mount, use a UID-1000-writable directory
+via `MOA_SOURCE_BROWSER_SECRET_PATH`. No site-specific source belongs in the image.
 
-`POST /evaluate` requires `Authorization: Bearer <token-file-value>` and JSON:
+The browser is Camoufox **152.0.4-beta.30**, Python wrapper **0.4.11**, Playwright
+**1.58.0**, Linux amd64. The build downloads one exact upstream archive and verifies
+its fixed SHA256 before extraction. Runtime requires that binary and never fetches
+browsers or addons. Upgrades require changing the pins and checking authentication;
+they are not automatic. Provenance is in [NOTICE.md](../services/source-browser/NOTICE.md).
+Keep the prior app/browser images and private source version for rollback together.
+Disabling the preference returns sources to their non-browser path; extensions
+requiring this experimental API will explicitly report it unavailable.
 
-```json
-{"scope":"host-issued-source-id","proxy":"","url":"https://example.com/","headers":{},"script":"document.title","timeoutMs":25000}
-```
+## Boundaries
 
-It returns `{ "result": <JSON> }` or `{ "error": "source_*" }`. Request body
-is at most 512 KiB, response at most 4 MiB, and timeout at most 90 seconds.
-The deadline includes upload, queueing, browser launch, navigation, challenge
-waiting and evaluation. The existing guest JS bridge currently limits its
-received result to 1 MiB even though the RPC transport permits 4 MiB.
-Scripts may use the existing Flutter `setResponse` wrapper passed by MOA.
+Authenticated `POST /evaluate` accepts a host-issued scope, proxy, public HTTPS URL,
+headers, script and timeout (up to 90 seconds). Optional `captureSession: true`
+returns host-only cookies/UA alongside `result`; MOA strips this metadata before
+returning the script result to the guest. Legacy result-only requests still work.
+Bodies are bounded to 512 KiB request / 4 MiB response; the existing WebView guest
+result limit is 1 MiB. Authentication, upload and queue time count toward deadlines.
 
-There are at most two in-memory contexts, keyed by host source ID and normalized
-proxy. Each context evaluates one request at a time. Cookies survive between
-requests in that context; no persistent cookie files are written. Idle contexts
-close after 120 seconds; the browser closes when the final context closes.
-Failures and client disconnects close the affected context. A bounded cleanup
-deadline kills the engine process group if graceful context cleanup stalls.
-The browser's parent/death guard and process-group cleanup cover descendants.
+Each evaluation attaches a fresh existing `openSourceBrowserProxy` to a stable
+loopback relay. DNS/public-IP pinning, 32 MiB/512 connection budgets, TLS checks,
+socket cleanup and bearer RPC authentication remain in force. Idle relays refuse
+connections. The relay is container-local: do not colocate untrusted processes.
+No cookies, tokens, URL details or raw browser diagnostics are logged.
 
-Each evaluation attaches a fresh existing `openSourceBrowserProxy` gate to its
-stable loopback relay. Detached relays refuse all connections. End-of-request
-detach destroys all sockets, and transport budgets reset (32 MiB / 512 requests).
-The browser-facing relay listens only on container loopback without Basic auth:
-INV 0.26.1 loses CONNECT authentication when route headers are overridden.
-The relay authenticates to the attached policy gate, and external RPC requires
-the shared token. Run this service in its dedicated container, not alongside
-untrusted local processes. No relay port is published.
-Production supports public HTTPS targets only. The unchanged Node gate checks
-DNS results and connects to a validated IP, including redirects/subresources;
-route-time DNS checks alone would not provide this pinning. Ordinary ancillary
-connection failures do not reject a verified DOM result, while address/URL and
-body-limit failures remain closed. Private targets are used only by injected
-localhost test gates, never by production configuration.
+Headless mode and humanization are enabled, locale/timezone explicit, and geo-IP
+probing disabled. The global browser proxy fails closed; contexts use the guarded
+relay. Media/popup, WebRTC, DoH and prefetch restrictions remain. A service-worker
+registration shim preserves the tested routing behavior; it can affect compatibility.
+Site success and long-lived CF clearance are not guaranteed. Health checks establish
+RPC readiness, not website reachability.
 
-Media requests, common video/audio/manifest extensions and popups are blocked;
-essential HTML/player/challenge iframes remain allowed. Injected request headers
-apply only to the initial target origin. Cloudflare interstitials are waited out,
-with locator-based checkbox interaction when offered; challenge state is checked
-before and after callback evaluation and is never returned as successful HTML.
-Browser fetching is for HTML/URL extraction; MOA's existing media relay handles
-playback. WebSocket connection-limit pref effectiveness has not been separately
-verified; INV's unsupported WebSocket routing API is deliberately not used.
-
-The image pins InvisiblePlaywright 0.26.1, invisible-core 36.32.0 and the sealed
-Linux amd64 Firefox 151.0 / firefox-36 engine. `INVPW_TRUE_HEADLESS=1` is forced.
-Build-time fetching verifies the upstream seal; runtime requires an installed
-binary and never downloads an engine. Full source/license provenance is in
-[NOTICE.md](../services/source-browser/NOTICE.md).
-
-The recipe uses Ubuntu 26.04 for the engine's newer NSS symbols ([package
-version](https://packages.ubuntu.com/resolute/libnss3)), with Node 22 copied from
-the official Node image. The Linux amd64 Docker image build and Firefox startup have been verified.
-Runtime font manifests use `XDG_CACHE_HOME=/tmp/browser-cache` on tmpfs;
-the sealed engine remains at its explicit read-only `/opt/browser-cache` path.
-The container retains a bounded 512-task process/thread budget; real challenge
-pages exhausted the previous 192-task limit. Site compatibility remains experimental.
-
-The launcher uses explicit `ko-KR` / `Asia/Seoul` so startup performs no direct
-Python egress/geo probe. It disables WebRTC, DoH and prefetch/speculative
-connections and configures a closed global browser proxy. Each context overrides
-it with the loopback relay to the authenticated gate. True headless and
-humanization are enabled; COOP/COEP preferences are disabled. Site compatibility
-and challenge completion are not guaranteed.
-
-INV rejects both `service_workers="block"` and WebSocket routing, and disabling
-`dom.serviceWorkers.enabled` also disables HTTP route interception. The service
-therefore leaves that engine pref enabled and installs a nonconfigurable
-`navigator.serviceWorker=undefined` initialization script in every frame before
-navigation. This blocks registration while preserving media/header routing,
-but is detectable and may affect site compatibility. Transport pinning does not depend on this script.
-
-Validation without any browser installation:
+## Focused verification
 
 ```sh
 node --test services/source-browser/tests/*.test.mjs
 python3 -m unittest discover -s services/source-browser/tests -p 'test_*.py'
+corepack pnpm --filter @moa/server exec tsx --test test/source-session.test.ts test/source-browser.test.ts test/source-network.test.ts
 docker compose -f compose.yaml -f compose.source-browser.yaml config --quiet
 ```
 
-For the two opt-in localhost checks, use an existing INV venv and set
-`MOA_SOURCE_BROWSER_BINARY` to its seal-verified Firefox path and
-`XDG_CACHE_HOME` to its existing cache. Run `tests/proxy-api.py` for Basic CONNECT,
-loopback-bypass and effective service-worker checks, or `tests/rpc-smoke.py` for
-one complete authenticated RPC/DOM/context-reuse/idle-close check. The latter
-injects local TLS trust and a local fixture gate only in test code. No real site,
-video downloads, new engine downloads, or production environment are involved.
-The full localhost RPC smoke passed with the real Firefox engine, including
-Referer delivery, context reuse and idle cleanup.
-
-Startup/errors log fixed public error codes only. Raw child diagnostics are
-discarded by the gate; tokens, cookies, scripts, proxy details and URLs are not
-logged. Authenticated `/health` checks RPC readiness, not site reachability or
-Cloudflare completion.
+Live browser checks are optional and use isolated containers, synthetic/local
+fixtures or privately managed sources. Never include private source artifacts in
+public tests, repositories, image contexts or deployment documentation.

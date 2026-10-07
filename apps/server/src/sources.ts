@@ -64,6 +64,7 @@ export class Sources {
     let value: string; try { value = parseOutboundProxy(proxy) || ''; } catch { throw new ApiFailure(400,'invalid-proxy-address'); }
     if (this.network().revision !== revision) throw new ApiFailure(409,'network-settings-conflict');
     this.db.run('INSERT OR REPLACE INTO server_network VALUES(1,?,?)',value,revision+1);
+    for (const row of this.db.all("SELECT s.id FROM source_entries s LEFT JOIN source_network n ON n.source_id=s.id WHERE COALESCE(n.proxy,'')=''")) this.browser.clear(row.id);
     for (const row of this.db.all('SELECT DISTINCT source_id FROM source_image_owners')) this.isolateImages(row.source_id);
     this.reads.clear(); this.db.run('DELETE FROM source_detail_observations'); this.db.run('UPDATE source_media SET detail_at=0');
     return this.network();
@@ -179,7 +180,7 @@ export class Sources {
           this.db.run('DELETE FROM source_health WHERE source_id=?', id);
           this.db.run('DELETE FROM source_network WHERE source_id=?', id);
           this.db.run("UPDATE source_entries SET code=NULL,installed_entry=NULL,sha256=NULL,preferences='{}',enabled=0 WHERE id=?", id);
-          this.invalidate(id);
+          this.browser.clear(id); this.invalidate(id);
         }
         this.db.removeNavigationSources(new Set(unique));
         // Images may be shared by several sources; retain any still referenced by a catalog item.
@@ -233,7 +234,7 @@ export class Sources {
         if(row.code && (row.sha256 !== fetched.sha256 || JSON.parse(row.installed_entry).version !== entry.version)) this.db.run('INSERT OR REPLACE INTO source_backups VALUES(?,?,?,?,?)',id,row.installed_entry,row.code,row.sha256 || '',row.preferences);
         this.db.run('UPDATE source_entries SET code=?,sha256=?,installed_entry=?,enabled=1 WHERE id=?', fetched.source, fetched.sha256, row.entry, id);
       });
-      this.invalidate(id); return this.list().find(s => s.id === id)!;
+      this.browser.clear(id); this.invalidate(id); return this.list().find(s => s.id === id)!;
     });
   }
   rollback(id:string) {
@@ -246,7 +247,7 @@ export class Sources {
         this.db.run('DELETE FROM source_backups WHERE source_id=?',id);
         this.db.run('DELETE FROM source_health WHERE source_id=?',id);
       });
-      this.invalidate(id);return this.list().find(s=>s.id===id)!;
+      this.browser.clear(id); this.invalidate(id);return this.list().find(s=>s.id===id)!;
     });
   }
   async diagnose(id:string,profile:string) {
@@ -273,6 +274,7 @@ export class Sources {
         this.db.run('UPDATE media SET type=?,metadata=? WHERE id=?', values.type || m.type, JSON.stringify(meta), m.id);
       }
     });
+    if (values.enabled === false) this.browser.clear(id);
     this.invalidate(id); return this.list().find(s => s.id === id)!;
   }
   private async call(id: string, action: string, params: Record<string, unknown> = {}) {
@@ -318,7 +320,7 @@ export class Sources {
       const saveHost = () => {
         if (!changes || !Object.keys(changes).some(hostPreference)) return;
         this.db.run('INSERT INTO source_network VALUES(?,?,?) ON CONFLICT(source_id) DO UPDATE SET proxy=excluded.proxy,browser=excluded.browser',id,proxy,Number(browser));
-        this.isolateImages(id); this.invalidate(id);
+        this.browser.clear(id); this.isolateImages(id); this.invalidate(id);
       };
       const hostFields = (): SourcePreference[] => [
         { key:'__moa_proxy', title:'개별 프록시', kind:'text', secret:false, value:proxy, summary:'비워 두면 서버 기본 프록시를 사용합니다. http://, https://, socks5:// 주소를 입력할 수 있습니다.' },
@@ -340,7 +342,7 @@ export class Sources {
           if (p.kind === 'boolean' ? typeof v !== 'boolean' : p.kind === 'select' ? !p.choices?.some(c => c.value === v) : p.kind === 'multi-select' ? !Array.isArray(v) || v.some(x => !p.choices?.some(c => c.value === x)) : typeof v !== 'string' || v.length > 8192) throw new ApiFailure(400, 'invalid-source-preference');
         }
         const state = { ...guestPreferences(JSON.parse(this.row(id).preferences)), ...guestChanges }; validatePreferenceState(state);
-        this.db.run('UPDATE source_entries SET preferences=? WHERE id=?', JSON.stringify(state), id); this.invalidate(id);
+        this.db.run('UPDATE source_entries SET preferences=? WHERE id=?', JSON.stringify(state), id); this.browser.clear(id); this.invalidate(id);
       }
       saveHost();
       const state = JSON.parse(this.row(id).preferences);
@@ -374,7 +376,12 @@ export class Sources {
     const proxies = new Set(owners.map(owner=>this.proxy(owner.source_id)));
     if (proxies.size !== 1) throw new ApiFailure(502,'image-proxy-conflict');
     const proxy = this.proxy(owners[0].source_id), headers = JSON.parse(row.headers);
-    const result = await transport({url:row.url,headers},this.abort.signal,[],8*1024*1024,proxy);
+    const sessionOwner = owners.find(o => this.db.get('SELECT browser FROM source_network WHERE source_id=?',o.source_id)?.browser);
+    let bootstrap: string | undefined;
+    try { const ref = new URL(headers.Referer || headers.referer || row.url); if (ref.origin === new URL(row.url).origin) bootstrap = ref.href; } catch {}
+    const result = sessionOwner && this.browser.configured && bootstrap && transport === compatibilityHttp && this.browser.sessions.has(sessionOwner.source_id,proxy,row.url)
+      ? await this.browser.sessions.request(sessionOwner.source_id,proxy,{url:row.url,headers,options:{browserSession:{url:bootstrap}}},this.abort.signal,8*1024*1024)
+      : await transport({url:row.url,headers},this.abort.signal,[],8*1024*1024,proxy);
     if (result.statusCode === 200) return result.bytes;
     // Sites behind a browser challenge reject plain image requests; reuse the owner's browser session.
     const owner = owners.find(o => this.db.get('SELECT browser FROM source_network WHERE source_id=?',o.source_id)?.browser);
@@ -551,5 +558,5 @@ export class Sources {
       filtered.apkLease = videos.apkLease; return filtered;
     }, 'interactive');
   }
-  async close() { this.abort.abort(); await Promise.allSettled([...this.reading.values()].flatMap(readers=>[...readers])); await this.reads.drain(); await this.queues.drain(); }
+  async close() { this.abort.abort(); this.browser.close(); await Promise.allSettled([...this.reading.values()].flatMap(readers=>[...readers])); await this.reads.drain(); await this.queues.drain(); }
 }

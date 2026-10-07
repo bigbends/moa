@@ -44,6 +44,40 @@ test('context reuse, source/proxy isolation, eviction, idle close, fresh request
   await service.close();
 });
 
+test('idle reaper closes contexts before stopping Python and protects active/queued work', async t => {
+  const releases = [];
+  const f = fixture({ maxContexts: 1, engine: { call: message => new Promise(resolve => {
+    f.events.push(['running', message.request.scope]); releases.push(() => resolve({ result: true }));
+  }) } });
+  t.after(() => f.service.close());
+  const active = f.service.evaluate(input('active'), new AbortController().signal); await tick();
+  const queued = f.service.evaluate(input('queued'), new AbortController().signal); await tick();
+  await f.service.reap(Date.now() + 200000);
+  assert.equal(f.service.sessions.size, 1);
+  assert.equal(f.service.slots.waiters.length, 1);
+  assert.equal(f.events.some(e => e[0] === 'stop' || e[0] === 'close'), false);
+  releases.shift()(); await active; await tick();
+  assert.deepEqual(f.events.filter(e => e[0] === 'running').map(e => e[1]), ['active', 'queued']);
+  assert.equal(f.events.some(e => e[0] === 'stop'), false, 'eviction while queued work starts must keep Python alive');
+  await f.service.reap(Date.now() + 200000);
+  assert.equal(f.service.sessions.size, 1, 'active queued request survives reaping');
+  releases.shift()(); await queued;
+  assert.equal(f.events.some(e => e[0] === 'stop'), false);
+  await f.service.reap(Date.now() + 200000);
+  assert.equal(f.service.sessions.size, 0);
+  assert.equal(f.service.slots.active, 0);
+  assert.equal(f.events.at(-1)[0], 'stop');
+  assert.equal(f.events.filter(e => e[0] === 'close').length, 2);
+});
+
+test('service exports captured state only for an explicit host capture request', async t => {
+  const session = { cookies: [{ name: 'session', value: 'private', domain: 'example.com' }], userAgent: 'Synthetic', engine: 'synthetic' };
+  const f = fixture({ engine: { call: async () => ({ result: 'guest-result', session }) } });
+  t.after(() => f.service.close());
+  assert.deepEqual(JSON.parse(await f.service.evaluate(input(), new AbortController().signal)), { result: 'guest-result' });
+  assert.deepEqual(JSON.parse(await f.service.evaluate({ ...input(), captureSession: true }, new AbortController().signal)), { result: 'guest-result', session });
+});
+
 test('same context serialized, different contexts parallel, queued abort does not steal a slot', async () => {
   const running = []; const releases = [];
   const { service } = fixture({ engine: { call: (message, signal) => new Promise((resolve, reject) => {

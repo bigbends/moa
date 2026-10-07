@@ -1,3 +1,5 @@
+import { SourceSessions } from './source-session.js';
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
@@ -21,6 +23,10 @@ const FAILURE_ALIASES: Record<string, string> = {
 export class SourceBrowser {
   private endpoint?: URL;
   private secret?: string;
+  private generations = new Map<string, string>();
+  readonly sessions = new SourceSessions((scope, proxy, request, signal) => this.evaluate(scope, proxy, request, signal));
+  clear(scope: string) { this.generations.delete(scope); this.sessions.clear(scope); }
+  close() { this.generations.clear(); this.sessions.close(); }
 
   constructor(config: { url?: string; secretFile?: string } = {
     url: process.env.MOA_SOURCE_BROWSER_URL,
@@ -43,9 +49,10 @@ export class SourceBrowser {
 
   get configured() { return this.endpoint !== undefined; }
 
-  invocation(scope: string, proxy: string | undefined): Pick<MangayomiInvocation, 'webview' | 'timeoutMs'> {
+  invocation(scope: string, proxy: string | undefined): Pick<MangayomiInvocation, 'webview' | 'http' | 'timeoutMs'> {
     return this.configured ? {
       timeoutMs: 120_000,
+      http: (request, signal) => this.sessions.request(scope, proxy, request, signal),
       webview: (request, signal) => this.evaluate(scope, proxy, request, signal),
     } : {};
   }
@@ -63,9 +70,12 @@ export class SourceBrowser {
           Array.isArray(input.headers) || Object.entries(input.headers).some(([name, value]) =>
             !/^[!#$%&'*+.^_`|~0-9a-z-]+$/i.test(name) || typeof value !== 'string' || /[\r\n\0]/.test(value)))))
       throw new Error('source_browser_failed');
+    let generation = this.generations.get(scope);
+    if (!generation) this.generations.set(scope, generation = randomUUID());
     const timeoutMs = Math.max(1, Math.min(90_000, Math.round(input.timeoutMs)));
     // Pick explicit fields: guest-supplied scope, proxy or RPC fields must never override host state.
-    const body = Buffer.from(JSON.stringify({ scope, proxy: proxy || '', url, headers: input.headers || {}, script: input.script, timeoutMs }));
+    const sessionState = this.sessions.snapshot(scope, proxy, url);
+    const body = Buffer.from(JSON.stringify({ scope: `${scope}:${generation}`, proxy: proxy || '', url, headers: input.headers || {}, script: input.script, timeoutMs, captureSession: true, sessionState }));
     if (body.length > REQUEST_LIMIT) throw new Error('source_body_limit');
 
     const deadline = new AbortController();
@@ -101,6 +111,8 @@ export class SourceBrowser {
       }
       // Redirects are deliberately not followed: the Bearer secret belongs only to this endpoint.
       if (response.statusCode !== 200 || !Object.hasOwn(envelope, 'result')) throw new Error('source_browser_failed');
+      if (this.generations.get(scope) !== generation) throw new Error('source_browser_failed');
+      if (envelope.session !== undefined) this.sessions.capture(scope, proxy, url, envelope.session);
       return envelope.result;
     } catch (error) {
       if (signal.aborted) throw new Error('cancelled');
