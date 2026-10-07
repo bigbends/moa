@@ -2,8 +2,7 @@
 
 This optional Camoufox service supplies browser callbacks and authentication to
 MOA's JS sources. The existing source **Connection** settings remain unchanged:
-per-source proxy (blank inherits the server proxy), and **Use source browser -
-experimental** (default off). APK requests and sources without this option keep
+per-source proxy (blank inherits the server proxy), and **Use browser authentication** (default off). APK requests and sources without this option keep
 their existing behavior. No browser port is published and no media relay is replaced.
 
 ## Session HTTP and lifecycle

@@ -324,8 +324,8 @@ export class Sources {
       };
       const hostFields = (): SourcePreference[] => [
         { key:'__moa_proxy', title:'개별 프록시', kind:'text', secret:false, value:proxy, summary:'비워 두면 서버 기본 프록시를 사용합니다. http://, https://, socks5:// 주소를 입력할 수 있습니다.' },
-        ...(js ? [{ key:'__moa_browser', title:'소스 브라우저 사용 - 실험', kind:'boolean' as const, secret:false, value:browser, disabled:!this.browser.configured,
-          summary:this.browser.configured ? '브라우저 호출을 지원하는 확장에서만 동작합니다. 사이트에 따라 느리거나 실패할 수 있습니다.' : '서버에 소스 브라우저 서비스가 설정되지 않았습니다.' }] : []),
+        ...(js ? [{ key:'__moa_browser', title:'브라우저 인증 사용', kind:'boolean' as const, secret:false, value:browser, disabled:!this.browser.configured,
+          summary:this.browser.configured ? '사이트 인증과 페이지 실행에 브라우저를 사용합니다.' : '서버에 소스 브라우저 서비스가 설정되지 않았습니다.' }] : []),
       ];
       if (entry.format === 'aniyomi-apk') return this.serial('apk:'+row.repository+':'+entry.package.pkg, async () => {
         const mapping = this.db.get('SELECT package_id FROM source_apk WHERE source_id=?',id);
