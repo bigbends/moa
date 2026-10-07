@@ -15,7 +15,7 @@ test('fresh release installation pins components, fetches the gateway, preserves
   const commands = [];
   const manifest = { version: 'v1.0.0', schemaEpoch: 1, minimumUpdaterVersion: '1.0.0', minimumComposeVersion: '2.24.0', services: Object.fromEntries(SERVICES.map(n => [n,{image:`ghcr.io/sidetool/${n}`,digest:`sha256:${'a'.repeat(64)}`,platforms:['linux/amd64','linux/arm64']}])) };
   const files = Object.fromEntries(BUNDLE_FILES.map(n => [n, n === '.env.example' ? 'PUBLIC_HOST=default\n' : 'synthetic public fixture\n']));
-  const config = { name: 'moa-fixture', services: { moa: { image:'old',environment:{LITERAL:'cost$5'},volumes:[{type:'volume',source:'synthetic-data',target:'/data'}] }, 'moa-auth':{ image:'old',volumes:[{type:'volume',source:'synthetic-auth',target:'/data'}]}, 'moa-gateway':{image:'nginx:fixture',volumes:[{type:'bind',source:'/incorrect/base/path',target:'/etc/nginx/templates/default.conf.template'}]} } };
+  const config = { name: 'moa-fixture', services: { moa: { image:'old',environment:{LITERAL:'cost$$5'},volumes:[{type:'volume',source:'synthetic-data',target:'/data'}] }, 'moa-auth':{ image:'old',volumes:[{type:'volume',source:'synthetic-auth',target:'/data'}]}, 'moa-gateway':{image:'nginx:fixture',volumes:[{type:'bind',source:'/incorrect/base/path',target:'/etc/nginx/templates/default.conf.template'}]} } };
   const run = async (command,args) => {
     commands.push([command,...args]);
     if(args[0]==='ps')return '';
@@ -42,4 +42,15 @@ test('fresh release installation pins components, fetches the gateway, preserves
 
 test('migration commands are not supported', async () => {
   for (const command of ['preview', 'adopt']) await assert.rejects(install([command]), /update-invalid-options/);
+});
+
+// Compose config has already escaped literal dollars for round-tripping.
+test('real Compose JSON preserves nginx variables through installation serialization', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const input=JSON.stringify({services:{gateway:{image:'nginx:alpine',environment:{IP:'$$remote_addr',FILTER:'^PUBLIC$$'}}}});
+  const args=['compose','--project-name','moa-config-fixture','-f','-','config','--format','json'];
+  const first=execFileSync('docker',args,{input,encoding:'utf8'});
+  const second=execFileSync('docker',args,{input:first,encoding:'utf8'});
+  assert.deepEqual(JSON.parse(second).services.gateway.environment,JSON.parse(first).services.gateway.environment);
+  assert.equal(JSON.parse(first).services.gateway.environment.IP,'$$remote_addr');
 });

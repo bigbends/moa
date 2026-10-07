@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ReleaseFeed, SERVICES, DEFAULT_POLICY, UPDATER_VERSION, version, compare, fail } from './release.mjs';
 import { stageBundle } from './release-bundle.mjs';
-import { atomic, privateDirectory, composeJSON } from './update-files.mjs';
+import { atomic, privateDirectory } from './update-files.mjs';
 const exec = promisify(execFile);
 const jsonLines = text => text.trim().startsWith('[') ? JSON.parse(text) : text.trim().split('\n').filter(Boolean).map(JSON.parse);
 
@@ -50,7 +50,7 @@ export async function install(args = process.argv.slice(2), dependencies = {}) {
     services = SERVICES.filter(n => config.services[n] && !config.services[n].profiles?.length);
     for (const mount of config.services['moa-gateway']?.volumes ?? []) if (mount.target === '/etc/nginx/templates/default.conf.template') mount.source = path.join(runtime, 'deploy/gateway/default.conf.template');
   }
-  await atomic(path.join(root, 'original-compose.json'), composeJSON(config));
+  await atomic(path.join(root, 'original-compose.json'), config);
   for (const name of services) {
     if (!m.services[name].platforms.includes(platform)) fail('update-platform-unsupported');
     config.services[name].image = `${m.services[name].image}@${m.services[name].digest}`;
@@ -66,7 +66,7 @@ export async function install(args = process.argv.slice(2), dependencies = {}) {
   app.volumes = [...(app.volumes ?? []).filter(v => v.target !== '/run/moa-updater'), { type: 'bind', source: shared, target: '/run/moa-updater' }];
   // Preserve the original resolved deployment; no environment or user override is overwritten.
   const compose = path.join(runtime, 'compose.json');
-  await atomic(compose, composeJSON(config));
+  await atomic(compose, config);
   await writeFile(path.join(root, 'trusted-key.pem'), publicKey, { mode: 0o600 });
   await copyFile(path.join(runtime, 'scripts/update-launcher.mjs'), path.join(root, 'launcher.mjs'));
   const argv = ['compose', '--project-name', project, '--project-directory', cwd, '-f', compose];
