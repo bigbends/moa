@@ -36,22 +36,10 @@ test('fresh release installation pins components, fetches the gateway, preserves
   assert.match(await readFile(path.join(cwd,'moa-updater.service'),'utf8'),/UMask=0007/);
   assert.ok(commands.some(c=>c.includes('pull')&&c.includes('nginx:fixture')));
   assert.ok(commands.every(c=>!c.includes('build')&&!c.includes('down')));
-  assert.equal(JSON.parse(await readFile(path.join(cwd,'.moa-release/policy.json'),'utf8')).autoApply,false);
+  assert.deepEqual(JSON.parse(await readFile(path.join(cwd,'.moa-release/policy.json'),'utf8')),{channel:'stable'});
   await assert.rejects(install(['install','--cwd',cwd,'--version','v1.0.0','--key',key],{feed,run}),/update-already-installed/);
 });
 
-test('adoption refuses a running local build before making deployment changes',async t=>{
-  const cwd=await mkdtemp(path.join(tmpdir(),'moa-adoption-'));t.after(()=>rm(cwd,{recursive:true,force:true}));
-  const key=path.join(cwd,'key');await writeFile(key,'fixture');const commands=[];
-  const manifest={minimumUpdaterVersion:'1.0.0',services:{moa:{image:'ghcr.io/sidetool/moa',digest:`sha256:${'a'.repeat(64)}`}}};
-  const feed={async releases(){return[{tag_name:'v1.0.0'}];},async manifest(){return{manifest};}};
-  const run=async(command,args)=>{
-    commands.push([command,...args]);
-    if(args.includes('config'))return JSON.stringify({name:'existing',services:{moa:{image:'local:custom'}}});
-    if(args.includes('ps'))return JSON.stringify([{Service:'moa',ID:'fixture'}]);
-    if(args[0]==='image')return '[]';return 'sha256:synthetic';
-  };
-  await assert.rejects(install(['adopt','--cwd',cwd,'--version','v1.0.0','--key',key],{feed,run}),/update-deployment-diverged/);
-  assert.ok(commands.every(c=>!['up','pull','stop','cp'].some(x=>c.includes(x))));
-  await assert.rejects(readFile(path.join(cwd,'.moa-release/installation.json')),e=>e.code==='ENOENT');
+test('migration commands are not supported', async () => {
+  for (const command of ['preview', 'adopt']) await assert.rejects(install([command]), /update-invalid-options/);
 });

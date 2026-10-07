@@ -1,7 +1,7 @@
 import { readFile, mkdir, rm, statfs, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { ReleaseFeed, DEFAULT_POLICY, UPDATER_VERSION, SERVICES, compare, version, policy, inWindow, fail } from './release.mjs';
+import { ReleaseFeed, DEFAULT_POLICY, UPDATER_VERSION, SERVICES, compare, version, policy, fail } from './release.mjs';
 import { atomic, readJson, optionalJson, privateDirectory } from './update-files.mjs';
 import { stageBundle } from './release-bundle.mjs';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -31,7 +31,7 @@ export class ReleaseUpdater {
   }
   async schedule() {
     await atomic(path.join(this.root, 'schedule.json'), { nextCheckAt: this.nextCheckAt, failedVersion: this.failedVersion });
-    this.host.state.nextCheckAt = this.policy.autoCheck ? this.nextCheckAt : null;
+    this.host.state.nextCheckAt = this.nextCheckAt;
   }
   async configure(settings) {
     await this.init(); this.policy = policy(settings);
@@ -49,7 +49,7 @@ export class ReleaseUpdater {
   async check() {
     await this.init();
     if (this.host.state.state === 'recovery-required') fail('update-recovery-required');
-    await this.phase('checking', { error: null, latest: null, deferredReason: null });
+    await this.phase('checking', { error: null, latest: null });
     this.candidate = undefined;
     try {
       const releases = await this.feed.releases(this.policy.channel);
@@ -68,7 +68,7 @@ export class ReleaseUpdater {
       if (!this.candidate && incompatible) throw incompatible;
       Object.assign(this.host.state, { current: this.current.version, latest: this.candidate?.manifest.version ?? this.current.version,
         notesUrl: this.candidate?.manifest.releaseNotesUrl ?? null, behind: this.candidate ? 1 : 0, checkedAt: Date.now(), state: this.candidate ? 'available' : 'current' });
-      this.nextCheckAt = Date.now() + this.policy.intervalHours * 3600000 * (0.9 + Math.random() * 0.2);
+      this.nextCheckAt = Date.now() + 6 * 3600000 * (0.9 + Math.random() * 0.2);
     } catch (error) {
       this.nextCheckAt = Date.now() + 60 * 60_000; throw error;
     } finally { await this.schedule(); }
@@ -145,7 +145,7 @@ export class ReleaseUpdater {
     this.compatible(m);
     let transaction;
     try {
-      await this.phase('preflight', { error: null, deferredReason: null });
+      await this.phase('preflight', { error: null });
       const composeVersion = (await this.host.run('docker', ['compose', 'version', '--short'])).trim();
       if (compare(composeVersion, m.minimumComposeVersion) < 0) fail('update-compose-required');
       const free = await statfs(this.root);
@@ -236,12 +236,7 @@ export class ReleaseUpdater {
   async tick() {
     await this.init();
     if (this.host.state.state === 'recovery-required') return;
-    if (this.policy.autoCheck && Date.now() >= this.nextCheckAt) await this.host.perform('check');
-    if (!this.policy.autoApply || !this.candidate || this.failedVersion === this.candidate.manifest.version) return;
-    let reason = null;
-    if (!inWindow(this.policy)) reason = 'outside-window';
-    else { const activity = await this.activity(); reason = !activity ? 'offline' : activity.busy ? 'busy' : null; }
-    if (reason) { await this.phase('waiting', { deferredReason: reason }); return; }
-    await this.host.perform('apply');
+    // Background work only discovers releases. Applying always requires an explicit request.
+    if (Date.now() >= this.nextCheckAt) await this.host.perform('check');
   }
 }

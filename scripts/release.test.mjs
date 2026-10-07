@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import {
-  DEFAULT_POLICY, SERVICES, ReleaseFeed, compare, version, policy, inWindow,
+  DEFAULT_POLICY, SERVICES, ReleaseFeed, compare, version, policy,
   sha256, verifiedManifest, download,
 } from './release.mjs';
 
@@ -72,20 +72,11 @@ test('manifest verification binds exact bytes to an Ed25519 key and validates si
   assert.throws(() => verifiedManifest(good.bytes, Buffer.alloc(257), trustedKey, repository), /update-manifest-invalid/);
 });
 
-test('policy validates strict fields and applies half-open windows across midnight and timezones', () => {
-  assert.equal(policy(DEFAULT_POLICY).autoApply, false);
-  const night = policy({ ...DEFAULT_POLICY, autoApply: true, timezone: 'Asia/Seoul', windowStart: '23:00', windowEnd: '01:00' });
-  for (const [utc, expected] of [
-    ['2026-01-01T13:59:00Z', false], ['2026-01-01T14:00:00Z', true],
-    ['2026-01-01T15:30:00Z', true], ['2026-01-01T16:00:00Z', false],
-  ]) assert.equal(inWindow(night, Date.parse(utc)), expected, utc);
-  assert.equal(inWindow(DEFAULT_POLICY, Date.parse('2026-01-01T03:00:00Z')), true);
-  assert.equal(inWindow(DEFAULT_POLICY, Date.parse('2026-01-01T05:00:00Z')), false);
-  for (const patch of [
-    { autoApply: true, autoCheck: false }, { intervalHours: 0 }, { intervalHours: 169 },
-    { timezone: 'Invalid/Zone' }, { windowStart: '24:00' }, { windowEnd: '03:00' },
-    { windowStart: ['03:00'] }, { windowEnd: ['05:00'] }, { command: 'ignored' },
-  ]) assert.throws(() => policy({ ...DEFAULT_POLICY, ...patch }), /update-invalid-policy/);
+test('policy accepts only the release channel; automatic installation is not configurable', () => {
+  assert.deepEqual(policy(DEFAULT_POLICY), { channel: 'stable' });
+  assert.deepEqual(policy({ channel: 'beta' }), { channel: 'beta' });
+  for (const patch of [{ channel: 'invalid' }, { autoApply: true }, { autoCheck: false }, { windowStart: '03:00' }, { command: 'ignored' }])
+    assert.throws(() => policy({ ...DEFAULT_POLICY, ...patch }), /update-invalid-policy/);
 });
 
 test('release feed selects published stable/beta versions using SemVer and reuses ETags', async () => {

@@ -8,7 +8,7 @@ import { Updates, validatePolicy } from '../src/updates.js';
 import { UpdateMaintenance } from '../src/update-maintenance.js';
 import { ApiFailure } from '../src/util.js';
 import { buildApp } from '../src/app.js';
-const policy = { channel: 'stable' as const, autoCheck: true, autoApply: false, intervalHours: 6, timezone: 'Asia/Seoul', windowStart: '03:00', windowEnd: '05:00' };
+const policy = { channel: 'stable' as const };
 
 test('release policies are validated, administrator-only and queued without claiming acknowledgement', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'moa-release-api-'));
@@ -35,7 +35,7 @@ test('release policies are validated, administrator-only and queued without clai
     await rm(path.join(dir, 'request.json'));
     await writeFile(path.join(dir, 'status.json'), JSON.stringify({ ...state, state: 'applying' }));
     assert.equal((await app.inject({ method: 'PATCH', url, headers, payload: chosen })).statusCode, 409);
-    await writeFile(path.join(dir, 'status.json'), JSON.stringify({ ...state, state: 'waiting', notesUrl: 'https://untrusted.invalid/', history: [{ version: 'v1.0.0', previous: 'v0.9.0', at: 1, outcome: 'complete', secret: 'hidden' }] }));
+    await writeFile(path.join(dir, 'status.json'), JSON.stringify({ ...state, state: 'available', notesUrl: 'https://untrusted.invalid/', history: [{ version: 'v1.0.0', previous: 'v0.9.0', at: 1, outcome: 'complete', secret: 'hidden' }] }));
     const status = await new Updates(dir).status();
     assert.equal(status.notesUrl, null);
     assert.equal('secret' in status.history![0], false);

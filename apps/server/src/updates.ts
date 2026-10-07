@@ -7,13 +7,8 @@ import { ApiFailure } from './util.js';
 
 export function validatePolicy(value: unknown): UpdatePolicy {
   const p = value as UpdatePolicy;
-  if (!p || typeof p !== 'object' || Array.isArray(p) || Object.keys(p).sort().join() !== 'autoApply,autoCheck,channel,intervalHours,timezone,windowEnd,windowStart' ||
-      !['stable', 'beta'].includes(p.channel) || typeof p.autoCheck !== 'boolean' || typeof p.autoApply !== 'boolean' || p.autoApply && !p.autoCheck ||
-      !Number.isInteger(p.intervalHours) || p.intervalHours < 1 || p.intervalHours > 168 || typeof p.timezone !== 'string' || p.timezone.length > 80 ||
-      typeof p.windowStart !== 'string' || typeof p.windowEnd !== 'string' ||
-      !/^([01]\d|2[0-3]):[0-5]\d$/.test(p.windowStart) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(p.windowEnd) || p.windowStart === p.windowEnd) throw new ApiFailure(400, 'update-invalid-policy');
-  try { new Intl.DateTimeFormat('en', { timeZone: p.timezone }); } catch { throw new ApiFailure(400, 'update-invalid-policy'); }
-  return { ...p };
+  if (!p || typeof p !== 'object' || Array.isArray(p) || Object.keys(p).join() !== 'channel' || !['stable', 'beta'].includes(p.channel)) throw new ApiFailure(400, 'update-invalid-policy');
+  return { channel: p.channel };
 }
 function releaseFields(data: Record<string, any>): Partial<UpdateStatus> {
   if (data.mode !== 'release') return {};
@@ -23,7 +18,6 @@ function releaseFields(data: Record<string, any>): Partial<UpdateStatus> {
     policy, updaterVersion: typeof data.updaterVersion === 'string' && /^\d+\.\d+\.\d+$/.test(data.updaterVersion) ? data.updaterVersion : undefined,
     nextCheckAt: Number.isSafeInteger(data.nextCheckAt) ? data.nextCheckAt : null,
     notesUrl: typeof data.notesUrl === 'string' && /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/releases\/tag\/v[0-9.]+(?:-beta\.\d+)?$/.test(data.notesUrl) ? data.notesUrl : null,
-    deferredReason: ['busy','offline','outside-window'].includes(data.deferredReason) ? data.deferredReason : null,
     history: Array.isArray(data.history) ? data.history.slice(0,20).filter(h => typeof h.version === 'string' && h.version.length < 80 && typeof h.previous === 'string' && h.previous.length < 80 && Number.isSafeInteger(h.at) && ['complete','rolled-back','failed'].includes(h.outcome)).map(h => ({ version: h.version, previous: h.previous, at: h.at, outcome: h.outcome })) : [],
   };
 }
@@ -37,7 +31,7 @@ export class Updates {
       const content = await readFile(path.join(this.dir, 'status.json'), 'utf8');
       if (content.length > 16384) throw new Error();
       const data = JSON.parse(content);
-      if (!['idle', 'checking', 'updating', 'current', 'available', 'blocked', 'failed', 'restart-required', 'downloading', 'preflight', 'waiting', 'backup', 'applying', 'verifying', 'rolling-back', 'rolled-back', 'recovery-required'].includes(data.state) || ![null, 'git', 'docker', 'release'].includes(data.mode)) throw new Error();
+      if (!['idle', 'checking', 'updating', 'current', 'available', 'blocked', 'failed', 'restart-required', 'downloading', 'preflight', 'backup', 'applying', 'verifying', 'rolling-back', 'rolled-back', 'recovery-required'].includes(data.state) || ![null, 'git', 'docker', 'release'].includes(data.mode)) throw new Error();
       const text = (value: unknown) => typeof value === 'string' && value.length <= 256 ? value : null;
       return { ...base, ...releaseFields(data), connected: data.connected === true && Number.isFinite(data.heartbeat) && Math.abs(Date.now() - data.heartbeat) < 15000, state: data.state, mode: data.mode,
         current: text(data.current) || base.current, latest: text(data.latest), branch: text(data.branch), behind: Number.isSafeInteger(data.behind) && data.behind >= 0 ? data.behind : 0, ahead: Number.isSafeInteger(data.ahead) && data.ahead >= 0 ? data.ahead : 0,
@@ -48,7 +42,7 @@ export class Updates {
     const status = await this.status();
     if (!this.dir || !status.connected) throw new ApiFailure(503, 'updater-unavailable');
     if (['checking', 'updating', 'downloading', 'preflight', 'backup', 'applying', 'verifying', 'rolling-back'].includes(status.state)) throw new ApiFailure(409, 'update-busy');
-    if (action === 'apply' && !['available', 'waiting'].includes(status.state)) throw new ApiFailure(409, 'update-not-available');
+    if (action === 'apply' && status.state !== 'available') throw new ApiFailure(409, 'update-not-available');
     if (action === 'configure' && status.mode !== 'release') throw new ApiFailure(409, 'update-release-required');
     const file = path.join(this.dir, 'request.json');
     const temp = path.join(this.dir, `request-${randomUUID()}.tmp`);

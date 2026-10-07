@@ -2,7 +2,7 @@
 import { createHash, createPublicKey, verify } from 'node:crypto';
 export const UPDATER_VERSION = '1.0.0';
 export const SERVICES = ['moa', 'moa-auth', 'moa-apk', 'moa-connector', 'moa-source-browser'];
-export const DEFAULT_POLICY = Object.freeze({ channel: 'stable', autoCheck: true, autoApply: false, intervalHours: 6, timezone: 'UTC', windowStart: '03:00', windowEnd: '05:00' });
+export const DEFAULT_POLICY = Object.freeze({ channel: 'stable' });
 export const fail = code => { throw new Error(code); };
 export const sha256 = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 export function version(value) {
@@ -16,18 +16,8 @@ export function compare(a, b) {
   return 0;
 }
 export function policy(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join() !== Object.keys(DEFAULT_POLICY).sort().join() ||
-    !['stable', 'beta'].includes(value.channel) || typeof value.autoCheck !== 'boolean' || typeof value.autoApply !== 'boolean' ||
-    !Number.isInteger(value.intervalHours) || value.intervalHours < 1 || value.intervalHours > 168 ||
-    typeof value.timezone !== 'string' || value.timezone.length > 80 || typeof value.windowStart !== 'string' || typeof value.windowEnd !== 'string' ||
-    !/^([01]\d|2[0-3]):[0-5]\d$/.test(value.windowStart) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value.windowEnd) || value.windowStart === value.windowEnd || value.autoApply && !value.autoCheck) fail('update-invalid-policy');
-  try { new Intl.DateTimeFormat('en', { timeZone: value.timezone }); } catch { fail('update-invalid-policy'); }
-  return { ...value };
-}
-export function inWindow(settings, now = Date.now()) {
-  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: settings.timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now);
-  const time = `${parts.find(p => p.type === 'hour').value}:${parts.find(p => p.type === 'minute').value}`;
-  return settings.windowStart < settings.windowEnd ? time >= settings.windowStart && time < settings.windowEnd : time >= settings.windowStart || time < settings.windowEnd;
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).join() !== 'channel' || !['stable', 'beta'].includes(value.channel)) fail('update-invalid-policy');
+  return { channel: value.channel };
 }
 export function validateManifest(value, repository = 'sidetool/moa') {
   const owner = repository.split('/')[0].toLowerCase();

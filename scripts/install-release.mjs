@@ -11,7 +11,7 @@ const jsonLines = text => text.trim().startsWith('[') ? JSON.parse(text) : text.
 
 export async function install(args = process.argv.slice(2), dependencies = {}) {
   const [action, ...flags] = args;
-  if (!['install', 'preview', 'adopt'].includes(action) || flags.length % 2) fail('update-invalid-options');
+  if (action !== 'install' || flags.length % 2) fail('update-invalid-options');
   const options = {};
   for (let i = 0; i < flags.length; i += 2) {
     if (!['--cwd', '--version', '--key', '--browser', '--project'].includes(flags[i]) || flags[i + 1] === undefined) fail('update-invalid-options');
@@ -29,28 +29,7 @@ export async function install(args = process.argv.slice(2), dependencies = {}) {
   if (compare(UPDATER_VERSION, m.minimumUpdaterVersion) < 0) fail('update-tool-required');
   const run = dependencies.run ?? (async (command, argv, timeout = 120000) => (await exec(command, argv, { cwd, timeout, maxBuffer: 8 * 1024 * 1024 })).stdout.trim());
   const platform = process.arch === 'x64' ? 'linux/amd64' : process.arch === 'arm64' ? 'linux/arm64' : fail('update-platform-unsupported');
-  let config, services, running = [];
-  if (action !== 'install') {
-    config = JSON.parse(await run('docker', ['compose', 'config', '--format', 'json']));
-    running = jsonLines(await run('docker', ['compose', 'ps', '--format', 'json']));
-    services = SERVICES.filter(n => running.some(c => c.Service === n));
-    if (!services.includes('moa') || services.some(n => !config.services[n])) fail('update-not-installed');
-    // Adoption requires an explicit already-installed release, never a guessed
-    // ancestry relation for a local image or a silent production downgrade.
-    const mismatches = [];
-    for (const name of services) {
-      const rows = running.filter(c => c.Service === name);
-      if (rows.length !== 1) fail('update-deployment-diverged');
-      const id = await run('docker', ['inspect', '--format', '{{.Image}}', rows[0].ID]);
-      const digests = JSON.parse(await run('docker', ['image', 'inspect', '--format', '{{json .RepoDigests}}', id]));
-      if (!digests?.includes(`${m.services[name].image}@${m.services[name].digest}`)) mismatches.push(name);
-    }
-    if (action === 'preview') {
-      const summary = { version: m.version, services, platform, changes: 'Keep resolved ports, mounts, networks and environment; pin managed images and add updater IPC.', ready: !mismatches.length, mismatchedServices: mismatches };
-      process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`); return;
-    }
-    if (mismatches.length) fail('update-deployment-diverged');
-  }
+  let config, services;
   await mkdir(cwd, { recursive: true });
   try { await access(path.join(root, 'installation.json')); fail('update-already-installed'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
   await privateDirectory(root);
@@ -59,10 +38,10 @@ export async function install(args = process.argv.slice(2), dependencies = {}) {
   await stageBundle(await feed.bundle(m), runtime);
   const shared = path.join(cwd, 'data/updater');
   await mkdir(shared, { recursive: true, mode: 0o770 }); await chmod(shared, 0o770);
-  const project = options.project || config?.name || 'moa';
+  const project = options.project || 'moa';
   if (!/^[a-z0-9][a-z0-9_-]*$/.test(project)) fail('update-invalid-options');
-  if (action === 'install') {
-    // A fresh folder only. Existing user .env is preserved; choose adopt for live deployments.
+  {
+    // A fresh folder only. Existing user .env is preserved; existing deployments keep their current updater.
     if ((await run('docker', ['ps', '-aq', '--filter', `label=com.docker.compose.project=${project}`])).trim()) fail('update-already-installed');
     try { await copyFile(path.join(runtime, '.env.example'), path.join(cwd, '.env'), 1); } catch (e) { if (e.code !== 'EEXIST') throw e; }
     const files = ['-f', path.join(runtime, 'compose.yaml')];
@@ -98,10 +77,10 @@ export async function install(args = process.argv.slice(2), dependencies = {}) {
   if (action === 'install') for (const [name, service] of Object.entries(config.services)) {
     if (!services.includes(name) && !service.profiles?.length && service.image) await run('docker', ['pull', '--platform', platform, service.image], 20 * 60000);
   }
-  await run('docker', [...argv, 'up', '-d', '--no-build', '--pull', 'never', '--wait', '--wait-timeout', '180', ...(action === 'adopt' ? services : [])], 300000);
+  await run('docker', [...argv, 'up', '-d', '--no-build', '--pull', 'never', '--wait', '--wait-timeout', '180'], 300000);
   await atomic(path.join(root, 'installation.json'), { format: 1, repository: 'sidetool/moa', project, platform });
   await atomic(path.join(root, 'current.json'), { version: m.version, schemaEpoch: m.schemaEpoch, services, compose, runtime });
-  await atomic(path.join(root, 'policy.json'), { ...DEFAULT_POLICY, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+  await atomic(path.join(root, 'policy.json'), DEFAULT_POLICY);
   // Unit is reviewable; registration is an explicit documented one-time command.
   const quote = value => '"' + value.replaceAll('%', '%%').replaceAll('\\', '\\\\').replaceAll('"', '\\"') + '"';
   const unit = `[Unit]\nDescription=MOA release updater\nAfter=network-online.target\n\n[Service]\nType=simple\nWorkingDirectory=${quote(cwd)}\nExecStart=${quote(process.execPath)} ${quote(path.join(root, 'launcher.mjs'))} --cwd ${quote(cwd)}\nRestart=on-failure\nRestartSec=10\nUMask=0007\n\n[Install]\nWantedBy=default.target\n`;

@@ -11,6 +11,7 @@ import { PROFILE_COLOR, cx } from "../lib/format";
 import { settledQuery, useSettledQuery } from "../lib/search-input";
 import { PluginScripts, PluginShortcuts } from './WebsitePlugins';
 import { AvatarArt, avatarSpec } from "./avatars";
+import { UpdateNotice } from './UpdateNotice';
 
 
 
@@ -170,6 +171,7 @@ export function AppShell() {
       <main className="page">
         <Outlet />
       </main>
+      <UpdateNotice />
 
       <nav className="tabbar" aria-label="하단 메뉴">
         <NavLink to="/" end className={({ isActive }) => cx("tab", isActive && "is-active")}><House size={22} /><span>홈</span></NavLink>

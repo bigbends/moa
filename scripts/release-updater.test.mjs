@@ -228,7 +228,7 @@ test('failed target health rolls back, releases maintenance, and suppresses auto
   assert.ok(f.commands.some(c => c.includes(f.previous.compose) && c.includes('up')));
   assert.ok(f.commands.every(c => !c.includes('cp') || c.some(arg => arg.endsWith(':/data/.'))));
   assert.equal(await optionalJson(path.join(f.dir, 'maintenance.json'), null), null);
-  f.manager.policy = { ...DEFAULT_POLICY, autoApply: true };
+  f.manager.policy = DEFAULT_POLICY;
   f.manager.nextCheckAt = Date.now() + 3600000;
   const commandsBefore = f.commands.length;
   await f.manager.tick();
@@ -277,32 +277,18 @@ test('unrecognized interrupted journal phases fail closed without host commands'
   assert.deepEqual(f.commands, []);
 });
 
-test('automatic apply defers for a missing or busy heartbeat and runs only in its window', async t => {
-  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-01-01T04:00:00Z') });
+test('background ticks check every six hours but never apply an available release', async t => {
   const f = await fixture(t);
-  await f.host.perform('check');
   await f.manager.tick();
-  assert.deepEqual(f.commands, [], 'automatic apply defaults off');
-  await f.manager.configure({ ...DEFAULT_POLICY, autoApply: true });
-  await f.host.perform('check');
-  await f.manager.tick();
-  assert.equal(f.host.state.deferredReason, 'offline');
-  await atomic(path.join(f.dir, 'activity.json'), { heartbeat: Date.now(), busy: true });
-  await f.manager.tick();
-  assert.equal(f.host.state.deferredReason, 'busy');
-  await atomic(path.join(f.dir, 'activity.json'), { heartbeat: Date.now() - 16000, busy: false });
-  await f.manager.tick();
-  assert.equal(f.host.state.deferredReason, 'offline');
-  await atomic(path.join(f.dir, 'activity.json'), { heartbeat: Date.now(), busy: false });
-  t.mock.timers.setTime(Date.parse('2026-01-01T05:00:00Z'));
-  f.manager.nextCheckAt = Date.now() + 3600000;
-  await f.manager.tick();
-  assert.equal(f.host.state.deferredReason, 'outside-window');
+  assert.equal(f.host.state.state, 'available');
   assert.deepEqual(f.commands, []);
-  t.mock.timers.setTime(Date.parse('2026-01-02T04:00:00Z'));
-  f.manager.nextCheckAt = Date.now() + 3600000;
-  await atomic(path.join(f.dir, 'activity.json'), { heartbeat: Date.now(), busy: false });
+  assert.ok(f.manager.nextCheckAt > Date.now() + 5 * 3600000);
+  const count = f.feedCalls.length;
   await f.manager.tick();
-  assert.equal(f.host.state.state, 'current');
-  assert.equal(f.host.state.current, 'v1.3.0');
+  assert.equal(f.feedCalls.length, count);
+  f.manager.nextCheckAt = 0;
+  await f.manager.tick();
+  assert.ok(f.feedCalls.length > count);
+  assert.deepEqual(f.commands, []);
+  await assert.rejects(f.manager.configure({ channel: 'stable', autoApply: true }), /update-invalid-policy/);
 });

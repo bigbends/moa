@@ -32,6 +32,7 @@ export class Updater {
     this.service = service;
     this.run = run || (async (command, args, timeout = 120000) => (await exec(command, args, { cwd: this.cwd, timeout, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout.trim());
     this.state = blank();
+    this.nextCheckAt = 0;
   }
   async persist() {
     await mkdir(this.dir, { recursive: true, mode: 0o770 });
@@ -160,6 +161,10 @@ export class Updater {
     Object.assign(this.state, { current: this.state.latest, behind: 0, checkedAt: Date.now() });
     await rm(path.join(this.dir, 'pending.json'), { force: true });
   }
+  async tick() {
+    if (this.release) return this.release.tick();
+    if (Date.now() >= this.nextCheckAt) await this.perform('check');
+  }
   async perform(action) {
     if (!['check', 'apply'].includes(action)) fail('update-request-invalid');
     try { await this[action](); }
@@ -169,6 +174,7 @@ export class Updater {
       this.state.error = code;
       this.state.checkedAt = Date.now();
     }
+    if (!this.release) this.nextCheckAt = Date.now() + (this.state.error ? 3600000 : 6 * 3600000);
     await this.persist();
     return this.state;
   }
@@ -230,8 +236,8 @@ export async function main(args = process.argv.slice(2)) {
     }
     if (updater.release) await updater.release.init();
     heartbeat = setInterval(() => void updater.persist().catch(() => { running = false; }), 5000);
-    if (updater.state.state !== 'recovery-required' && (!updater.release || updater.release.policy.autoCheck && Date.now() >= updater.release.nextCheckAt)) await updater.perform('check');
-    while (running && !updater.restartRequested) { await updater.consume(); if (updater.release) await updater.release.tick(); await new Promise(resolve => setTimeout(resolve, 1000)); }
+    if (updater.state.state !== 'recovery-required' && (!updater.release || Date.now() >= updater.release.nextCheckAt)) await updater.perform('check');
+    while (running && !updater.restartRequested) { await updater.consume(); await updater.tick(); await new Promise(resolve => setTimeout(resolve, 1000)); }
   } finally {
     clearInterval(heartbeat);
     process.removeListener('SIGTERM', stop);
