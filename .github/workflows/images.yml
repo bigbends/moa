@@ -1,7 +1,6 @@
 name: Container images
 on:
-  push:
-    branches: [main]
+  # Development images are opt-in; release tags build and publish release images.
   workflow_dispatch:
 permissions:
   contents: read
@@ -45,6 +44,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Registry name
+        id: registry
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: echo "owner=${OWNER,,}" >> "$GITHUB_OUTPUT"
       - uses: docker/metadata-action@v5
         id: meta
         with:
@@ -61,5 +65,7 @@ jobs:
           build-args: MOA_REVISION=${{ github.sha }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ steps.registry.outputs.owner }}/${{ matrix.image }}:buildcache
+            type=gha,scope=${{ matrix.image }}
+          cache-to: type=registry,ref=ghcr.io/${{ steps.registry.outputs.owner }}/${{ matrix.image }}:buildcache,mode=max,ignore-error=true

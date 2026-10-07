@@ -89,8 +89,10 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ github.ref_name }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ steps.registry.outputs.owner }}/${{ matrix.image }}:buildcache
+            type=gha,scope=${{ matrix.image }}
+          cache-to: type=registry,ref=ghcr.io/${{ steps.registry.outputs.owner }}/${{ matrix.image }}:buildcache,mode=max,ignore-error=true
       - name: Record digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}

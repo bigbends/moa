@@ -86,7 +86,7 @@ docker compose up -d --pull never
 
 실행 중인 Docker 이미지에 커밋 정보가 없으면 위 명령으로 처음 한 번 빌드한다. 실행 중인 이미지가 선택한 소스보다 앞서거나 다른 기록에 속하면 자동 업데이트를 중단한다. 호스트에서 배포할 브랜치를 확인하고 해당 이미지의 커밋을 포함한 소스를 사용한다.
 
-GitHub Actions는 실행한 저장소 소유자의 GHCR에 이미지를 발행한다. `main`은 `edge`와 커밋 태그를, 완성된 정식 릴리스는 `stable`/`latest`와 버전 태그를 사용하며, 포크의 작업 브랜치는 해당 브랜치에서 직접 빌드해 테스트한다. 업데이트 도구도 소스 설치에서는 현재 추적 브랜치를 그대로 유지한다.
+GitHub Actions는 실행한 저장소 소유자의 GHCR에 이미지를 발행한다. 수동 실행한 개발 이미지 workflow는 `edge`와 커밋 태그를, 완성된 정식 릴리스는 `stable`/`latest`와 버전 태그를 사용하며, 포크의 작업 브랜치는 해당 브랜치에서 직접 빌드해 테스트한다. 업데이트 도구도 소스 설치에서는 현재 추적 브랜치를 그대로 유지한다.
 
 ## 웹 업데이트 흐름
 
@@ -149,8 +149,10 @@ docker compose --project-name YOUR_PROJECT --project-directory /absolute/path/mo
 
 ## Maintainer: 릴리스 발행
 
-`main`은 edge/sha 이미지, 버전 태그는 정식 또는 베타 Release를 만듭니다. 발행 환경 `releases`의 Ed25519 개인키 Secret `RELEASE_PRIVATE_KEY`와 공개키 variable `RELEASE_PUBLIC_KEY`를 사용합니다. 공개키는 `deploy/release-trust.json`과 일치해야 합니다. 개인키를 저장소에 넣지 않습니다.
+개발용 edge/sha 이미지는 `Container images` workflow를 수동 실행하여 만듭니다. main 병합만으로 중복 빌드하지 않으며, 버전 태그는 정식 또는 베타 Release를 만듭니다. 발행 환경 `releases`의 Ed25519 개인키 Secret `RELEASE_PRIVATE_KEY`와 공개키 variable `RELEASE_PUBLIC_KEY`를 사용합니다. 공개키는 `deploy/release-trust.json`과 일치해야 합니다. 개인키를 저장소에 넣지 않습니다.
 
 태그는 `vX.Y.Z` 또는 `vX.Y.Z-beta.N`입니다. `deploy/release-policy.json`에 해당 version, minimumVersion, schemaEpoch, rollbackSafe를 검토하고 같은 버전의 `docs/releases/` 노트를 작성합니다. 구버전 실행 호환성을 확인하지 않았으면 rollbackSafe를 true로 선언하지 않습니다.
 
 필수 검사·이미지 빌드 후 고정 공개 파일 목록으로 설치 묶음을 만들고 서명합니다. 모든 산출물이 준비된 draft만 공개합니다. 공개한 버전을 덮어쓰지 않습니다. stable/latest/beta 별칭을 사용하되 인앱 설치는 manifest의 digest를 사용합니다. 베타 최초 발행 전 실제 registry 빌드 결과를 확인해야 합니다.
+
+빌드 캐시는 각 이미지의 GHCR `buildcache` 태그에 저장해 릴리스 태그 사이에서도 공유합니다. 캐시가 없으면 정상 빌드하고, 캐시 저장 실패만으로 완성된 릴리스를 중단하지 않습니다. 배포 버전은 서명된 manifest의 digest를 사용하며 `buildcache` 태그를 실행하지 않습니다. 의존성·베이스 이미지의 보안 업데이트가 필요하면 관리자가 해당 빌드 입력을 갱신해 릴리스를 발행합니다.
