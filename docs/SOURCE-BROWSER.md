@@ -14,7 +14,7 @@ source, source settings generation, selected proxy and exact HTTPS origin. Sourc
 credentials are currently configured per installed source, shared by viewing
 profiles; this feature does not introduce per-profile website accounts.
 
-At most 64 HTTP sessions are retained, with 30 minutes of inactivity expiry and
+At most 64 HTTP sessions are retained, with 60 minutes of inactivity expiry and
 bounded cookie count/size. Nothing is written to the database or disk. MOA restart
 requires fresh authentication. Preferences, proxy changes, removal, disabling,
 installation and rollback invalidate the applicable authentication state. Requests
