@@ -154,3 +154,5 @@ docker compose --project-name YOUR_PROJECT --project-directory /absolute/path/mo
 태그는 `vX.Y.Z` 또는 `vX.Y.Z-beta.N`입니다. `deploy/release-policy.json`에 해당 version, minimumVersion, schemaEpoch, rollbackSafe를 검토하고 같은 버전의 `docs/releases/` 노트를 작성합니다. 구버전 실행 호환성을 확인하지 않았으면 rollbackSafe를 true로 선언하지 않습니다.
 
 필수 검사·이미지 빌드 후 고정 공개 파일 목록으로 설치 묶음을 만들고 서명합니다. 모든 산출물이 준비된 draft만 공개합니다. 공개한 버전을 덮어쓰지 않습니다. stable/latest/beta 별칭을 사용하되 인앱 설치는 manifest의 digest를 사용합니다. 베타 최초 발행 전 실제 registry 빌드 결과를 확인해야 합니다.
+
+빌드 캐시는 각 이미지의 GHCR `buildcache` 태그에 저장해 릴리스 태그 사이에서도 공유합니다. 캐시가 없으면 정상 빌드하고, 캐시 저장 실패만으로 완성된 릴리스를 중단하지 않습니다. 배포 버전은 서명된 manifest의 digest를 사용하며 `buildcache` 태그를 실행하지 않습니다. 의존성·베이스 이미지의 보안 업데이트가 필요하면 관리자가 해당 빌드 입력을 갱신해 릴리스를 발행합니다.
