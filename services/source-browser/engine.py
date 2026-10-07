@@ -71,8 +71,9 @@ async def clear_challenge(page, deadline):
 
 
 def launch_options(binary=None):
-    return dict(headless=True, humanize=True, timezone='Asia/Seoul', locale='ko-KR', binary_path=binary,
-                extra_prefs={
+    return dict(headless=True, humanize=True, geoip=False, locale='ko-KR', executable_path=binary,
+                config={'timezone': 'Asia/Seoul'}, main_world_eval=True, i_know_what_im_doing=True,
+                firefox_user_prefs={
                     'devtools.jsonview.enabled': False,
                     'browser.tabs.remote.useCrossOriginOpenerPolicy': False,
                     'browser.tabs.remote.useCrossOriginEmbedderPolicy': False,
@@ -113,17 +114,21 @@ class Engine:
                 await self.manager.__aexit__(None, None, None)
                 self.contexts.clear()
             if self.launcher is None:
-                from invisible_playwright.async_api import InvisiblePlaywright
-                self.launcher = InvisiblePlaywright
-            # binary_path always resolves an already installed seal-verified
-            # engine. The runtime never downloads a missing browser.
+                from camoufox.async_api import AsyncCamoufox
+                self.launcher = AsyncCamoufox
+            # Only the build-pinned local binary is allowed; never download at runtime.
             binary = os.environ.get('MOA_SOURCE_BROWSER_BINARY')
             if not binary or not os.path.isfile(binary):
                 raise RuntimeError('source_browser_unavailable')
-            os.environ['INVPW_TRUE_HEADLESS'] = '1'
-            self.manager = self.launcher(**launch_options(binary))
+            from camoufox.addons import DefaultAddons
+            from camoufox import pkgman
+            from pathlib import Path
+            pkgman.INSTALL_DIR = Path(binary).parent
+            options = launch_options(binary)
+            options['exclude_addons'] = list(DefaultAddons)
+            self.manager = self.launcher(**options)
             self.browser = await self.manager.__aenter__()
-            if self.browser.version != '151.0':
+            if self.browser.version != '152.0.4-beta.30':
                 await self.close()
                 raise RuntimeError('source_browser_version')
             return self.browser
@@ -148,11 +153,10 @@ class Engine:
                 if context is None:
                     async with self.context_lock:
                         browser = await self.get_browser()
-                        context = await browser.new_context(proxy=message['proxy'])
+                        state = request.get('sessionState')
+                        context = await browser.new_context(proxy=message['proxy'], **({'user_agent': state['userAgent']} if state else {}))
                         self.contexts[key] = context
-                    # INV requires the service-worker interception pref ON for
-                    # route(). Disable page registration at initialization in
-                    # every frame instead; all actual transport still pins IPs.
+                    # Keep interception enabled but block page service-worker registration.
                     await context.add_init_script("Object.defineProperty(navigator,'serviceWorker',{value:undefined,configurable:false,writable:false});")
                     async def route_handler(route):
                         if allow_request(route.request.url, route.request.resource_type):
@@ -166,6 +170,10 @@ class Engine:
                         else:
                             await route.abort()
                     await context.route('**/*', route_handler)
+                if request.get('sessionState'):
+                    # A host snapshot includes HTTP Set-Cookie updates and deletions.
+                    await context.clear_cookies()
+                    await context.add_cookies(request['sessionState']['cookies'])
                 self.requests[key] = request
                 page = await context.new_page()
                 # Close every popup, while allowing content/challenge iframes.
@@ -197,7 +205,18 @@ class Engine:
                 encoded = json.dumps({'result': result}, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
                 if len(encoded.encode()) > RESPONSE_LIMIT:
                     raise RuntimeError('source_body_limit')
-                return {'result': result}
+                reply = {'result': result}
+                if request.get('captureSession'):
+                    cookies = await context.cookies()
+                    host = urlsplit(request['url']).hostname
+                    cookies = [c for c in cookies if c['domain'].lstrip('.') == host or
+                               (c['domain'].startswith('.') and host.endswith(c['domain']))]
+                    session = {'cookies': cookies, 'userAgent': await page.evaluate('navigator.userAgent'),
+                               'engine': 'camoufox-152.0.4-beta.30'}
+                    if len(cookies) > 96 or len(json.dumps(session).encode()) > 128 * 1024:
+                        raise RuntimeError('source_body_limit')
+                    reply['session'] = session
+                return reply
         except BaseException:
             await self.close_context(key)
             raise

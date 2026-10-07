@@ -1,0 +1,5 @@
+{
+  "algorithm": "Ed25519",
+  "fingerprint": "SHA256:e9662676e9c55ae58b948dc9bfe2a7f027d2f2e2604b10bd0f446e2d12e0ae34",
+  "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAN1CuP5fZjzfPw33M3EhK5AF4AYvFVNoPtUUKJCsqvR0=\n-----END PUBLIC KEY-----\n"
+}

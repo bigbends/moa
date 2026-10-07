@@ -1,0 +1,29 @@
+name: Checks
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable && pnpm install --frozen-lockfile
+      - run: pnpm --filter @moa/extensions --filter @moa/subtitles-ko --filter @moa/skip-markers build
+      - run: pnpm typecheck
+      - run: node --test scripts/update.test.mjs scripts/release.test.mjs scripts/release-updater.test.mjs scripts/install-release.test.mjs scripts/release-artifacts.test.mjs
+      - run: pnpm --filter @moa/server exec tsx --test test/updates.test.ts test/updates-release.test.ts test/source-session.test.ts test/source-browser.test.ts test/source-network.test.ts
+      - run: pnpm --filter @moa/web build
+      - name: Isolated Docker update and rollback
+        run: |
+          docker pull node:22-bookworm-slim
+          node scripts/verify-release-docker.mjs --run

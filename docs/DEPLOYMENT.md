@@ -110,7 +110,7 @@ TMDB 키는 관리자 API `PATCH /api/admin/tmdb/config`로 DB에 저장할 수 
 
 기본 outbound proxy는 앱의 설정 → 소스 연결에서 관리한다. 빈 값은 직접 연결이고 HTTP(S) CONNECT와 SOCKS5를 지원한다. 기존 proxy 설정은 앱 SQLite에 저장되므로 데이터 디렉터리를 보존한다. Gemini·OpenAI 및 호환 API의 키도 관리자 화면에서 관리하며 관련 비밀 파일은 `/data`에 저장한다. 번역은 자막과 문맥을 설정한 API로 보내며 제공자에 따라 비용이 발생할 수 있다.
 
-업그레이드 전 앱·인증 DB, `.env`, `deploy/local`, APK named volume과 token을 비공개로 백업한다. SQLite 파일은 일관된 backup API를 쓰거나 서비스를 멈춘 상태에서 복사하고 WAL/SHM도 고려한다. 미디어는 별도로 보존한다. 기존 설치의 `MEDIA_CONTAINER_PATH`를 바꾸면 DB에 저장된 로컬 경로가 달라질 수 있다. 공개 이미지는 main의 `latest`와 버전 태그(예: `v1.0.0`)로 배포한다. `.env`의 `MOA_VERSION`으로 네 이미지의 버전을 함께 고정할 수 있다. 최초 GHCR 발행 후 각 패키지의 공개 접근 권한을 확인해야 한다. 공개 이미지가 없는 브랜치는 다음 명령으로 직접 빌드해 실행한다.
+업그레이드 전 앱·인증 DB, `.env`, `deploy/local`, APK named volume과 token을 비공개로 백업한다. SQLite 파일은 일관된 backup API를 쓰거나 서비스를 멈춘 상태에서 복사하고 WAL/SHM도 고려한다. 미디어는 별도로 보존한다. 기존 설치의 `MEDIA_CONTAINER_PATH`를 바꾸면 DB에 저장된 로컬 경로가 달라질 수 있다. 개발 이미지는 main의 `edge`, 정식 릴리스는 `stable`/`latest`와 버전 태그(예: `v1.0.0`)로 배포한다. 정식/베타 채널과 자동 업데이트 설치는 [업데이트 안내](UPDATES.md#정식베타-릴리스-설치)를 참고한다. `.env`의 `MOA_VERSION`으로 네 이미지의 버전을 함께 고정할 수 있다. 최초 GHCR 발행 후 각 패키지의 공개 접근 권한을 확인해야 한다. 공개 이미지가 없는 브랜치는 다음 명령으로 직접 빌드해 실행한다.
 
 ```sh
 MOA_REVISION=$(git rev-parse HEAD) docker compose build

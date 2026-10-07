@@ -2,7 +2,6 @@ name: Container images
 on:
   push:
     branches: [main]
-    tags: ['v*']
   workflow_dispatch:
 permissions:
   contents: read
@@ -18,17 +17,25 @@ jobs:
       matrix:
         include:
           - image: moa
+            platforms: linux/amd64,linux/arm64
             context: .
             file: Dockerfile
           - image: moa-auth
+            platforms: linux/amd64,linux/arm64
             context: deploy/auth
             file: deploy/auth/Dockerfile
           - image: moa-connector
+            platforms: linux/amd64,linux/arm64
             context: services/connector
             file: services/connector/Dockerfile
           - image: moa-apk
+            platforms: linux/amd64,linux/arm64
             context: .
             file: deploy/aniyomi/Dockerfile
+          - image: moa-source-browser
+            platforms: linux/amd64
+            context: .
+            file: deploy/source-browser/Dockerfile
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -43,14 +50,13 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=tag
+            type=raw,value=edge,enable={{is_default_branch}}
             type=sha
       - uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platforms }}
           push: true
           build-args: MOA_REVISION=${{ github.sha }}
           tags: ${{ steps.meta.outputs.tags }}

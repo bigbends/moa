@@ -19,7 +19,8 @@ class Slots {
 }
 
 export class BrowserService {
-  constructor({ engine, openProxy, relayFactory = openRelay, maxContexts = 2, idleMs = 120_000 }) {
+  constructor({ engine, openProxy, relayFactory = openRelay, maxContexts = 2, idleMs = 30_000 }) {
+    this.reaping = new Set();
     this.engine = engine; this.openProxy = openProxy; this.relayFactory = relayFactory;
     this.maxContexts = maxContexts; this.idleMs = idleMs; this.sessions = new Map(); this.locks = new Map();
     this.slots = new Slots(maxContexts); this.closed = false;
@@ -28,12 +29,22 @@ export class BrowserService {
   async discard(key, row) {
     if (this.sessions.get(key) !== row) return;
     this.sessions.delete(key); row.relay?.close();
-    await this.engine.closeSession(key).catch(() => {});
+    const closing = this.engine.closeSession(key).catch(() => {});
+    this.reaping.add(closing);
+    try { await closing; } finally { this.reaping.delete(closing); }
   }
   async reap(now = Date.now()) {
     for (const [key, row] of this.sessions) {
-      if (!row.busy && now - row.last >= this.idleMs) await this.discard(key, row);
+      if (row.busy || now - row.last < this.idleMs || this.locks.has(key)) continue;
+      const lock = new Slots(1); this.locks.set(key, lock);
+      await lock.take(new AbortController().signal);
+      try { await this.discard(key, row); }
+      finally { lock.release(); if (!lock.active && !lock.waiters.length) this.locks.delete(key); }
     }
+    this.stopIdleEngine();
+  }
+  stopIdleEngine() {
+    if (!this.sessions.size && !this.slots.active && !this.slots.waiters.length && !this.reaping.size && !this.locks.size) this.engine.stop();
   }
   async evaluate(request, signal) {
     if (this.closed) throw Error('source_browser_unavailable');
@@ -73,7 +84,7 @@ export class BrowserService {
       if (gate.failure && gate.failure !== 'source_connection_failed') throw Error(gate.failure);
       if (reply.error) throw Error(safeError({ message: reply.error }));
       if (!Object.hasOwn(reply, 'result')) throw Error('source_result_invalid');
-      const body = JSON.stringify({ result: reply.result });
+      const body = JSON.stringify({ result: reply.result, ...(request.captureSession && reply.session ? { session: reply.session } : {}) });
       if (Buffer.byteLength(body) > RESPONSE_LIMIT) throw Error('source_body_limit');
       return body;
     } catch (error) {
@@ -83,6 +94,7 @@ export class BrowserService {
       if (row) { row.busy = false; row.last = Date.now(); }
       if (slot) this.slots.release(); lock.release();
       if (!lock.active && !lock.waiters.length) this.locks.delete(key);
+      this.stopIdleEngine();
     }
   }
   async close() {

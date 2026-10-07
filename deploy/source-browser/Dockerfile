@@ -14,16 +14,11 @@ COPY services/source-browser/requirements.txt /app/services/source-browser/requi
 RUN python3 -m venv /opt/browser-venv \
     && /opt/browser-venv/bin/pip install --no-cache-dir -r /app/services/source-browser/requirements.txt
 ENV PATH="/opt/browser-venv/bin:${PATH}" \
-    XDG_CACHE_HOME=/opt/browser-cache \
-    INVPW_TRUE_HEADLESS=1 \
-    MOA_SOURCE_BROWSER_BINARY=/opt/browser-cache/invisible-playwright/firefox-36_151.0_20261004151457/firefox
-# Explicit build-time fetch only, with the pinned core's SHA256/seal validation.
-# This image supports Linux amd64 only; refuse other architectures.
-RUN test "$(dpkg --print-architecture)" = amd64 \
-    && python -m invisible_playwright fetch \
-    && test -f "$MOA_SOURCE_BROWSER_BINARY" \
-    && python -c "from invisible_core.seal import active_seal; s=active_seal(); assert s.tag == 'firefox-36' and s.upstream_version == '151.0'" \
-    && chmod -R a+rX /opt/browser-cache
+    MOA_SOURCE_BROWSER_BINARY=/opt/camoufox/camoufox
+# Exact tested release; verify bytes before extraction. Runtime downloads are disabled.
+RUN test "$(dpkg --print-architecture)" = amd64
+COPY services/source-browser/install-browser.py /app/install-browser.py
+RUN python /app/install-browser.py && chmod -R a+rX /opt/camoufox
 COPY services/source-browser /app/services/source-browser
 # Reuse the current public-IP/DNS-pinning policy; do not fork or vendor it.
 COPY services/aniyomi-worker/browser/proxy.mjs services/aniyomi-worker/browser/policy.mjs services/aniyomi-worker/browser/address.mjs /app/services/aniyomi-worker/browser/

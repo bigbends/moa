@@ -31,3 +31,7 @@ apps/web/public/__mock
 /.tmp
 /.audit
 /apps/server/scripts/.audit-before.ts
+
+.moa-release
+release-output
+release-digests

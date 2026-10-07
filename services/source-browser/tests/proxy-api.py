@@ -14,7 +14,10 @@ from engine import launch_options
 
 
 async def main():
-    from invisible_playwright.async_api import InvisiblePlaywright
+    from camoufox.async_api import AsyncCamoufox
+    from camoufox.addons import DefaultAddons
+    from camoufox import pkgman
+    pkgman.INSTALL_DIR = Path(os.environ['MOA_SOURCE_BROWSER_BINARY']).parent
     seen = []
     expected = 'Basic ' + base64.b64encode(b'probe-user:probe-password').decode()
     async def handler(reader, writer):
@@ -31,9 +34,10 @@ async def main():
     server = await asyncio.start_server(handler, '127.0.0.1', 0)
     proxy = dict(server=f'http://127.0.0.1:{server.sockets[0].getsockname()[1]}',
                  username='probe-user', password='probe-password', bypass='<-loopback>')
-    os.environ['INVPW_TRUE_HEADLESS'] = '1'
-    async with server, InvisiblePlaywright(**launch_options(os.environ['MOA_SOURCE_BROWSER_BINARY'])) as browser:
-        assert browser.version == '151.0'
+    options = launch_options(os.environ['MOA_SOURCE_BROWSER_BINARY'])
+    options['exclude_addons'] = list(DefaultAddons)
+    async with server, AsyncCamoufox(**options) as browser:
+        assert browser.version == '152.0.4-beta.30'
         context = await browser.new_context(proxy=proxy)
         await context.add_init_script("Object.defineProperty(navigator,'serviceWorker',{value:undefined,configurable:false,writable:false});")
         page = await context.new_page()
@@ -47,7 +51,7 @@ async def main():
         await context.close()
     assert 'CONNECT proxy-preflight.invalid:443 HTTP/1.1' in seen, seen
     assert 'CONNECT 127.0.0.1:44333 HTTP/1.1' in seen, seen
-    print('PASS Firefox 151.0: new_context authenticated HTTP proxy; localhost bypass disabled; service workers absent')
+    print('PASS Camoufox: new_context authenticated HTTP proxy; localhost bypass disabled; service workers absent')
 
 
 asyncio.run(main())

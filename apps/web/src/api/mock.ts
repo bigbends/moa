@@ -430,6 +430,8 @@ export function installMockApi() {
     if (/^\/episodes\/[^/]+\/subtitles\/translations$/.test(path)) return json(translatedTracks.get(decodeURIComponent(path.split("/")[2])) ?? []);
     // `moa.mockRole=member` previews the screens a regular profile sees.
     if (path === "/me") return json(localStorage.getItem("moa.mockRole") === "member" ? { id: "m1", username: "member", role: "member" } : { id: "a1", username: "admin", role: "admin" });
+    // `moa.mockPlugins` holds a JSON plugin list for previewing the plugin screens.
+    if (path === "/plugins" && method === "GET") return json(JSON.parse(localStorage.getItem("moa.mockPlugins") ?? "[]"));
     if (path === "/sources" && method === "GET") return json(videoSources);
     if (path === "/source-repositories" && method === "GET") return json([{ url: sourceRepo, kind: "mangayomi-js", checkedAt: new Date().toISOString() }]);
     if (/^\/sources\/[^/]+\/preferences$/.test(path)) return json([]);

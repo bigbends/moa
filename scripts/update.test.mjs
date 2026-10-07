@@ -140,3 +140,17 @@ test('source-based Docker updates build the fork and retry before replacing runn
     assert.equal(updater.state.current, 'unknown');
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('existing host installations periodically check without ever applying automatically', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'moa-update-check-only-'));
+  const updater = new Updater({ dir }); let checks = 0;
+  updater.check = async () => { checks++; updater.state.state = 'available'; };
+  updater.apply = async () => { assert.fail('automatic apply is not allowed'); };
+  try {
+    await updater.tick(); assert.equal(checks, 1);
+    await updater.tick(); assert.equal(checks, 1);
+    updater.nextCheckAt = 0;
+    await updater.tick(); assert.equal(checks, 2);
+    assert.equal(updater.state.state, 'available');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

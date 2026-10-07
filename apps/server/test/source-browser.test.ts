@@ -12,9 +12,9 @@ import { Sources } from '../src/sources.js';
 import { Store } from '../src/db.js';
 import { Catalog } from '../src/catalog.js';
 
-const request: SourceWebViewRequest = { url: 'https://source.test/page', headers: { Referer: 'https://source.test/' }, script: 'true', waitUntil: 'load', timeoutMs: 25_000 };
+const request: SourceWebViewRequest = { url: 'https://example.com/page', headers: { Referer: 'https://example.com/' }, script: 'true', waitUntil: 'load', timeoutMs: 25_000 };
 const signal = () => AbortSignal.timeout(10_000);
-type Rpc = { scope: string; proxy: string; url: string; headers: Record<string, string>; script: string; timeoutMs: number };
+type Rpc = { scope: string; proxy: string; url: string; headers: Record<string, string>; script: string; timeoutMs: number; captureSession: boolean };
 async function fixture(t: TestContext, handler: (rpc: Rpc, req: IncomingMessage, res: ServerResponse) => void | Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), 'moa-source-browser-'));
   const secret = randomBytes(32).toString('hex'), secretFile = join(root, 'token');
@@ -37,21 +37,26 @@ async function fixture(t: TestContext, handler: (rpc: Rpc, req: IncomingMessage,
     await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   });
-  return { root, secret, secretFile, url, calls, transport, browser: new SourceBrowser({ url, secretFile }) };
+  const browser = new SourceBrowser({ url, secretFile });
+  t.after(() => browser.close());
+  return { root, secret, secretFile, url, calls, transport, browser };
 }
 
 test('RPC authenticates a private administrator endpoint and picks host scope/proxy, headers and bounded timeout', async t => {
   const f = await fixture(t, (_rpc, _req, res) => { res.end(JSON.stringify({ result: { items: [1, null, true, '합성'], ok: true } })); });
   for (const endpoint of [f.url, f.url + '/evaluate']) {
     const browser = new SourceBrowser({ url: endpoint, secretFile: f.secretFile });
-    const result = await browser.evaluate('host-source', 'socks5://proxy.test:1080', { ...request, timeoutMs: 200_000, scope: 'guest-source', proxy: 'socks5://guest.test:9999' } as SourceWebViewRequest, signal());
+    t.after(() => browser.close());
+    const result = await browser.evaluate('host-source', 'socks5://proxy.example.com:1080', { ...request, timeoutMs: 200_000, scope: 'guest-source', proxy: 'socks5://guest.example.com:9999' } as SourceWebViewRequest, signal());
     assert.deepEqual(result, { items: [1, null, true, '합성'], ok: true });
   }
-  assert.deepEqual(f.calls[0], { scope: 'host-source', proxy: 'socks5://proxy.test:1080', url: request.url, headers: request.headers, script: request.script, timeoutMs: 90_000 });
+  assert.deepEqual(f.calls[0], { scope: f.calls[0].scope, proxy: 'socks5://proxy.example.com:1080', url: request.url, headers: request.headers, script: request.script, timeoutMs: 90_000, captureSession: true });
+  assert.match(f.calls[0].scope, /^host-source:[0-9a-f-]{36}$/);
+  assert.notEqual(f.calls[0].scope, f.calls[1].scope);
   assert.deepEqual(f.transport, Array.from({ length: 2 }, () => ({ path: '/evaluate', method: 'POST', authorization: `Bearer ${f.secret}` })));
   assert.ok(!JSON.stringify(f.calls).includes(f.secret));
   await f.browser.evaluate('other-source', undefined, { ...request, headers: undefined }, signal());
-  assert.equal(f.calls[2].scope, 'other-source');
+  assert.match(f.calls[2].scope, /^other-source:[0-9a-f-]{36}$/);
   assert.equal(f.calls[2].proxy, '');
   assert.deepEqual(f.calls[2].headers, {});
 });
@@ -78,9 +83,33 @@ test('disabled browser preserves unavailable behavior; partial, invalid and unre
   assert.equal(f.calls.length, 0);
 });
 
+test('session capture stays on the host; clear rotates RPC generation and rejects stale capture', async t => {
+  const session = { cookies: [{ name: 'session', value: 'private-cookie', domain: 'example.com', path: '/', secure: true, httpOnly: true, expires: -1 }], userAgent: 'Synthetic Browser', engine: 'synthetic' };
+  let release!: () => void, started!: () => void, hold = false;
+  const f = await fixture(t, async (_rpc, _req, res) => {
+    if (hold) { started(); await new Promise<void>(resolve => { release = resolve; }); }
+    res.end(JSON.stringify({ result: { guest: true }, session }));
+  });
+  const captures: unknown[] = [];
+  const capture = f.browser.sessions.capture.bind(f.browser.sessions);
+  t.mock.method(f.browser.sessions, 'capture', (...args: Parameters<typeof capture>) => { captures.push(args[3]); capture(...args); });
+  assert.deepEqual(await f.browser.evaluate('source', undefined, request, signal()), { guest: true });
+  assert.deepEqual(captures, [session]);
+  await f.browser.evaluate('source', undefined, request, signal());
+  assert.equal(f.calls[0].scope, f.calls[1].scope);
+  hold = true;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  const pending = assert.rejects(f.browser.evaluate('source', undefined, request, signal()), /source_browser_failed/);
+  await ready; f.browser.clear('source'); release(); await pending;
+  assert.equal(captures.length, 2, 'cleared generation must not resurrect cookies');
+  hold = false;
+  await f.browser.evaluate('source', undefined, request, signal());
+  assert.notEqual(f.calls.at(-1)!.scope, f.calls[0].scope);
+});
+
 test('publicUrl check and input/request limits reject before any browser RPC', async t => {
   const f = await fixture(t, () => {});
-  for (const url of ['http://source.test/', 'file:///private', 'https://user:pass@source.test/', 'https://source.test/#fragment', 'not a URL'])
+  for (const url of ['http://example.com/', 'file:///private', 'https://user:pass@example.com/', 'https://example.com/#fragment', 'not a URL'])
     await assert.rejects(f.browser.evaluate('source', undefined, { ...request, url }, signal()), { message: 'source_url_denied' });
   for (const input of [
     { ...request, timeoutMs: NaN }, { ...request, timeoutMs: 0 },
@@ -177,14 +206,14 @@ test('unreachable administrator endpoint yields only the normalized unavailable 
   await assert.rejects(browser.evaluate('source', undefined, request, signal()), { message: 'source_browser_unavailable' });
 });
 
-const entry = { id: 'guest-advertised-id', name: 'Synthetic provider', lang: 'ko', version: '1', baseUrl: 'https://source.test/', sourceCodeUrl: 'https://repo.test/source.js', format: 'mangayomi-js' as const, itemType: 1 as const, isNsfw: false, hasCloudflare: false };
+const entry = { id: 'guest-advertised-id', name: 'Synthetic provider', lang: 'ko', version: '1', baseUrl: 'https://example.com/', sourceCodeUrl: 'https://repo.example.com/source.js', format: 'mangayomi-js' as const, itemType: 1 as const, isNsfw: false, hasCloudflare: false };
 const guest = `class DefaultExtension extends MProvider {
   getSourcePreferences(){return [{key:'label',editTextPreference:{title:'Label',value:'Synthetic'}}];}
-  async getFilterList(){return await evaluateJavascriptViaWebview('https://source.test/filters',{},["window.flutter_inappwebview.callHandler('setResponse',[])"]);}
-  async getPopular(){const list=await evaluateJavascriptViaWebview('https://source.test/list',{'X-Fixture':'list'},["window.flutter_inappwebview.callHandler('setResponse',[{name:'Synthetic work',link:'/work'}])"]);return {list,hasNextPage:false};}
+  async getFilterList(){return await evaluateJavascriptViaWebview('https://example.com/filters',{},["window.flutter_inappwebview.callHandler('setResponse',[])"]);}
+  async getPopular(){const list=await evaluateJavascriptViaWebview('https://example.com/list',{'X-Fixture':'list'},["window.flutter_inappwebview.callHandler('setResponse',[{name:'Synthetic work',link:'/work'}])"]);return {list,hasNextPage:false};}
   async search(){return {list:[{name:'Without browser',link:'/search'}],hasNextPage:false};}
-  async getDetail(url){return await sendMessage('evaluateJavascriptViaWebview',JSON.stringify(['https://source.test/detail',{},["window.flutter_inappwebview.callHandler('setResponse',{name:'Synthetic work',chapters:[{name:'1',url:'/episode'}]})"],5]));}
-  async getVideoList(){return await evaluateJavascriptViaWebview('https://source.test/video',{},["window.flutter_inappwebview.callHandler('setResponse',[{url:'https://media.test/video.m3u8',quality:'720p'}])"],200);}
+  async getDetail(url){return await sendMessage('evaluateJavascriptViaWebview',JSON.stringify(['https://example.com/detail',{},["window.flutter_inappwebview.callHandler('setResponse',{name:'Synthetic work',chapters:[{name:'1',url:'/episode'}]})"],5]));}
+  async getVideoList(){return await evaluateJavascriptViaWebview('https://example.com/video',{},["window.flutter_inappwebview.callHandler('setResponse',[{url:'https://media.example.com/video.m3u8',quality:'720p'}])"],200);}
 }`;
 
 test('Sources installs async filters and executes real JS webview/sendMessage bridge through local RPC, with host row identity and proxy', async t => {
@@ -205,26 +234,26 @@ test('Sources installs async filters and executes real JS webview/sendMessage br
   const sources = new Sources(db, catalog, async input => { seen.push(input); return invokeMangayomi(input); },
     async () => ({ source: guest, sha256: 'synthetic-digest' }));
   const row = JSON.stringify(entry);
-  db.run('INSERT INTO source_entries(id,repository,entry) VALUES(?,?,?)', 'host-row-a', 'https://repo.test/index.json', row);
-  db.run('INSERT INTO source_entries(id,repository,entry) VALUES(?,?,?)', 'host-row-b', 'https://repo.test/index.json', row);
+  db.run('INSERT INTO source_entries(id,repository,entry) VALUES(?,?,?)', 'host-row-a', 'https://repo.example.com/index.json', row);
+  db.run('INSERT INTO source_entries(id,repository,entry) VALUES(?,?,?)', 'host-row-b', 'https://repo.example.com/index.json', row);
   for (const id of ['host-row-a','host-row-b']) db.run('INSERT INTO source_network VALUES(?,?,1)',id,'');
   db.run('INSERT INTO profiles(id,name,color,kids,created_at) VALUES(?,?,?,?,?)', 'p', 'p', 'blue', 0, '2026');
   t.after(async () => { await sources.close(); db.close(); });
-  sources.saveNetwork('socks5://proxy.test:1080', 0);
+  sources.saveNetwork('socks5://proxy.example.com:1080', 0);
   await sources.install('host-row-a');
   assert.equal(f.calls.length, 1);
-  assert.equal(f.calls[0].scope, 'host-row-a');
+  assert.match(f.calls[0].scope, /^host-row-a:[0-9a-f-]{36}$/);
   assert.ok(f.calls[0].url.endsWith('/filters'));
   await sources.install('host-row-b');
-  assert.equal(f.calls[1].scope, 'host-row-b');
+  assert.match(f.calls[1].scope, /^host-row-b:[0-9a-f-]{36}$/);
   const page = await sources.browse('host-row-a', 'p');
   assert.equal(page.items[0].title, 'Synthetic work');
   await sources.detail(page.items[0].id);
   const episodeId = db.get('SELECT id FROM episodes WHERE media_id=?', page.items[0].id)!.id;
-  assert.equal((await sources.videos(episodeId))[0].url, 'https://media.test/video.m3u8');
+  assert.equal((await sources.videos(episodeId))[0].url, 'https://media.example.com/video.m3u8');
   assert.ok(f.calls.some(rpc => rpc.url.endsWith('/detail') && rpc.timeoutMs === 5000));
   assert.ok(f.calls.some(rpc => rpc.url.endsWith('/video') && rpc.timeoutMs === 90_000));
-  assert.ok(f.calls.every(rpc => rpc.proxy === 'socks5://proxy.test:1080' && rpc.scope !== entry.id));
+  assert.ok(f.calls.every(rpc => rpc.proxy === 'socks5://proxy.example.com:1080' && rpc.scope !== entry.id));
   assert.deepEqual(f.calls.find(rpc => rpc.url.endsWith('/list'))!.headers, { 'X-Fixture': 'list' });
   const count = f.calls.length;
   await sources.preferences('host-row-a');
@@ -238,14 +267,14 @@ test('Sources installs async filters and executes real JS webview/sendMessage br
   sources.saveNetwork('', 1);
   await sources.capabilities('host-row-b');
   assert.equal(f.calls.at(-1)!.proxy, '');
-  assert.equal(f.calls.at(-1)!.scope, 'host-row-b');
+  assert.match(f.calls.at(-1)!.scope, /^host-row-b:[0-9a-f-]{36}$/);
 });
 
 test('unconfigured Sources keeps default invocation budget and reports browser unavailable through real guest', async t => {
   const f = await fixture(t, () => {}), db = new Store(join(f.root, 'data')), seen: MangayomiInvocation[] = [];
   const sources = new Sources(db, new Catalog(db), async input => { seen.push(input); return invokeMangayomi(input); }, undefined, undefined, undefined, new SourceBrowser({}));
   const row = JSON.stringify(entry);
-  db.run('INSERT INTO source_entries(id,repository,entry,installed_entry,code,enabled) VALUES(?,?,?,?,?,1)', 'host-row', 'https://repo.test/index.json', row, row, guest);
+  db.run('INSERT INTO source_entries(id,repository,entry,installed_entry,code,enabled) VALUES(?,?,?,?,?,1)', 'host-row', 'https://repo.example.com/index.json', row, row, guest);
   db.run('INSERT INTO profiles(id,name,color,kids,created_at) VALUES(?,?,?,?,?)', 'p', 'p', 'blue', 0, '2026');
   t.after(async () => { await sources.close(); db.close(); });
   await assert.rejects(sources.browse('host-row', 'p'), { message: 'source_browser_unavailable' });
@@ -269,7 +298,7 @@ test('Sources shutdown aborts a real in-flight guest browser RPC', async t => {
   const f = await fixture(t, (_rpc, _req, res) => { res.on('close', closed); started(); });
   const db = new Store(join(f.root, 'data')), sources = new Sources(db, new Catalog(db), undefined, undefined, undefined, undefined, f.browser);
   const row = JSON.stringify(entry);
-  db.run('INSERT INTO source_entries(id,repository,entry,installed_entry,code,enabled) VALUES(?,?,?,?,?,1)', 'host-row', 'https://repo.test/index.json', row, row, guest);
+  db.run('INSERT INTO source_entries(id,repository,entry,installed_entry,code,enabled) VALUES(?,?,?,?,?,1)', 'host-row', 'https://repo.example.com/index.json', row, row, guest);
   db.run('INSERT INTO source_network VALUES(?,?,1)','host-row','');
   db.run('INSERT INTO profiles(id,name,color,kids,created_at) VALUES(?,?,?,?,?)', 'p', 'p', 'blue', 0, '2026');
   t.after(async () => { await sources.close(); db.close(); });

@@ -38,6 +38,8 @@ RUN corepack pnpm --filter @moa/server... install --prod --frozen-lockfile
 
 FROM node:22-bookworm-slim AS runtime
 ARG MOA_REVISION=unknown
+ARG MOA_VERSION=unknown
+LABEL org.opencontainers.image.version=$MOA_VERSION
 LABEL org.opencontainers.image.revision=$MOA_REVISION
 # Jellyfin's own 7.x ffmpeg includes the Radeon VAAPI userspace drivers.
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
@@ -57,7 +59,7 @@ COPY --from=build /app/apps/web/dist ./web
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md ./
 COPY LICENSES ./LICENSES
 COPY docs/THIRD-PARTY-SOURCES.md ./docs/THIRD-PARTY-SOURCES.md
-ENV NODE_ENV=production MOA_DEPLOYMENT=docker MOA_REVISION=$MOA_REVISION MOA_DATA_DIR=/data MOA_MEDIA_ROOT=/media MOA_WEB_DIR=/app/web \
+ENV NODE_ENV=production MOA_DEPLOYMENT=docker MOA_REVISION=$MOA_REVISION MOA_VERSION=$MOA_VERSION MOA_DATA_DIR=/data MOA_MEDIA_ROOT=/media MOA_WEB_DIR=/app/web \
     MOA_FFMPEG=/usr/lib/jellyfin-ffmpeg/ffmpeg MOA_FFPROBE=/usr/lib/jellyfin-ffmpeg/ffprobe \
     MOA_7ZIP=/usr/bin/7zz LIBVA_DRIVERS_PATH=/usr/lib/jellyfin-ffmpeg/lib/dri
 EXPOSE 8795
