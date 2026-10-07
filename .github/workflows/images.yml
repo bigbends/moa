@@ -1,7 +1,6 @@
 name: Container images
 on:
-  push:
-    branches: [main]
+  # Development images are opt-in; release tags build and publish release images.
   workflow_dispatch:
 permissions:
   contents: read
