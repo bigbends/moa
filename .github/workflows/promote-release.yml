@@ -1,0 +1,48 @@
+name: Repair release image aliases
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release tag
+        required: true
+        type: string
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: moa-release-publication
+  cancel-in-progress: false
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify published manifest
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          node --input-type=module <<'JS'
+          import { readFile, mkdir, writeFile } from 'node:fs/promises';
+          import { ReleaseFeed, SERVICES, version } from './scripts/release.mjs';
+          version(process.env.RELEASE_TAG);
+          const trust=JSON.parse(await readFile('deploy/release-trust.json','utf8'));
+          const feed=new ReleaseFeed({repository:process.env.GITHUB_REPOSITORY,publicKey:trust.publicKey});
+          const release=(await feed.releases('beta')).find(r=>r.tag_name===process.env.RELEASE_TAG);
+          if(!release)throw Error('Published release required');
+          const {manifest}=await feed.manifest(release);
+          await mkdir('release-digests',{recursive:true});
+          for(const name of SERVICES)await writeFile(`release-digests/${name}.txt`,manifest.services[name].digest);
+          JS
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore aliases without rebuilding release assets
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node scripts/promote-release.mjs
