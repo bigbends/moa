@@ -1,6 +1,6 @@
 // Development-only API stand-in (VITE_MOCK=1). It answers the same contract
 // as apps/server so screens can be built before the server lands.
-import type { VideoSource, Episode, HomeResponse, MediaCard, MediaDetail, PlaybackSession, Profile, ProviderRef, Row, Settings, SubtitleTrack } from "@moa/shared";
+import type { VideoSource, Episode, EpisodeProgress, HistoryEntry, HomeResponse, MediaCard, MediaDetail, PlaybackSession, Profile, ProviderRef, Row, Settings, SubtitleTrack } from "@moa/shared";
 import type { JimakuCandidate, JimakuSearch, TranslationConfig, TranslationJob } from "./translation";
 
 const local: ProviderRef = { id: "local", name: "내 라이브러리", kind: "local" };
@@ -15,16 +15,14 @@ const oshiEpisodes: Episode[] = Array.from({ length: 13 }, (_, i) => ({
   number: i + 1,
   title: `${i + 1}화`,
   thumb: img(`oshi-${i + 1}`),
-  duration: 1420 + (i % 3) * 30,
-  progress: i < 2 ? { position: 1420, duration: 1420, completed: true, updatedAt: new Date(now - 86_400_000).toISOString() }
-    : i === 2 ? { position: 612, duration: 1450, completed: false, updatedAt: new Date(now - 3_600_000).toISOString() } : undefined
+  duration: 1420 + (i % 3) * 30
 }));
 
 const cards: MediaCard[] = [
   { id: "oshi", title: "예제 시리즈 2기", type: "anime", backdrop: img("oshi-3"), year: 2024, genres: ["드라마", "미스터리"], provider: local, episodeCount: 13,
-    progress: { episodeId: "oshi-e3", ratio: 612 / 1450, label: "S2:E3 · 14분 남음" }, badge: "새 에피소드", addedAt: new Date(now - 7_200_000).toISOString() },
+    badge: "새 에피소드", addedAt: new Date(now - 7_200_000).toISOString() },
   { id: "lalaland", title: "라라랜드", type: "movie", backdrop: img("lalaland-a"), year: 2016, genres: ["뮤지컬", "로맨스"], provider: local,
-    progress: { episodeId: "lalaland-m", ratio: .31, label: "1시간 29분 남음" }, addedAt: new Date(now - 86_400_000 * 2).toISOString() },
+    addedAt: new Date(now - 86_400_000 * 2).toISOString() },
   { id: "demo-1", title: "밤의 도시를 걷다", type: "series", backdrop: img("oshi-7"), year: 2025, genres: ["드라마"], provider: ext, episodeCount: 8 },
   { id: "demo-2", title: "여름의 끝에서", type: "movie", backdrop: img("lalaland-b"), year: 2023, genres: ["로맨스"], provider: ext },
   { id: "demo-3", title: "스테이지 뒤편", type: "anime", backdrop: img("oshi-10"), year: 2024, genres: ["음악"], provider: ext, episodeCount: 12 },
@@ -44,39 +42,96 @@ let profiles: Profile[] = [
 // Development-only PIN state, reset on reload; never return PINs in profile JSON.
 const profilePins = new Map<string, string>();
 let unlockedProfile: string | null = null;
-let settings: Settings = { autoplayNext: true, autoplayDelay: 5, defaultSubtitleLang: "ko", subtitleSize: "medium", preferredQuality: "auto", hardwareTranscoding: true, autoFetchSubtitles: true, translationMode: "manual", translationSourcePriority: "site", skipSubtitleSearchWithSiteTrack: true, skipTranslationWithoutSubtitles: true, experimentalSubtitleSync: true };
+let settings: Settings = { groupHistory: true, autoplayNext: true, autoplayDelay: 5, defaultSubtitleLang: "ko", subtitleSize: "medium", preferredQuality: "auto", hardwareTranscoding: true, autoFetchSubtitles: true, translationMode: "manual", translationSourcePriority: "site", skipSubtitleSearchWithSiteTrack: true, skipTranslationWithoutSubtitles: true, experimentalSubtitleSync: true };
+
+/* Viewing progress per episode. Seeded with a half-watched episode, a half-watched movie and a
+   finished episode whose next one should lead "continue watching" without a progress bar. */
+const ago = (ms: number) => new Date(now - ms).toISOString();
+const progressLog = new Map<string, EpisodeProgress>([
+  ["oshi-e1", { position: 1420, duration: 1420, completed: true, updatedAt: ago(86_400_000) }],
+  ["oshi-e2", { position: 1450, duration: 1450, completed: true, updatedAt: ago(86_000_000) }],
+  ["oshi-e3", { position: 612, duration: 1450, completed: false, updatedAt: ago(3_600_000) }],
+  ["lalaland-m", { position: 2380, duration: 7680, completed: false, updatedAt: ago(86_400_000 * 2) }],
+  ["demo-1-e1", { position: 2700, duration: 2700, completed: true, updatedAt: ago(10_900_000) }],
+  ["demo-1-e2", { position: 2700, duration: 2700, completed: true, updatedAt: ago(10_800_000) }]
+]);
+
+function episodesOf(id: string): Episode[] {
+  const card = byId.get(id);
+  if (!card) return [];
+  const base: Episode[] = id === "oshi" ? oshiEpisodes
+    : card.type === "movie" ? [{ id: `${id}-m`, mediaId: id, season: 1, number: 1, title: card.title, duration: 7680, thumb: card.backdrop }]
+    : Array.from({ length: card.episodeCount ?? 6 }, (_, i) => ({ id: `${id}-e${i + 1}`, mediaId: id, season: 1, number: i + 1, title: `${i + 1}화`, duration: 2700 }));
+  return base.map(episode => ({ ...episode, progress: progressLog.get(episode.id) }));
+}
+
+/** Mirrors the server: the latest viewed episode wins; a finished one points at the next unfinished episode. */
+function continueOf(id: string) {
+  const card = byId.get(id)!, episodes = episodesOf(id), movie = card.type === "movie";
+  const latest = episodes.filter(e => e.progress && (e.progress.position > 0 || e.progress.completed))
+    .sort((a, b) => b.progress!.updatedAt.localeCompare(a.progress!.updatedAt))[0];
+  if (!latest) return null;
+  if (!latest.progress!.completed) return { episode: latest, resume: { episodeId: latest.id, position: latest.progress!.position, kind: "resume" as const, label: movie ? "이어보기" : `이어보기 S${latest.season}:E${latest.number}` } };
+  const next = movie ? undefined : episodes.slice(episodes.indexOf(latest) + 1).find(e => !e.progress?.completed);
+  return next ? { episode: next, resume: { episodeId: next.id, position: next.progress?.position || 0, kind: "next" as const, label: `다음 회차 S${next.season}:E${next.number}` } } : null;
+}
+
+function withProgress(card: MediaCard): MediaCard {
+  const target = continueOf(card.id);
+  if (!target) return card;
+  const p = target.episode.progress, e = target.episode;
+  if (!p || p.completed || p.position <= 0) return { ...card, resume: target.resume };
+  // Only real unfinished viewing has a bar; an unseen next episode has none.
+  const left = Math.max(1, Math.round((p.duration - p.position) / 60));
+  const remaining = left >= 60 ? `${Math.floor(left / 60)}시간 ${left % 60}분 남음` : `${left}분 남음`;
+  return { ...card, resume: target.resume, progress: { episodeId: e.id, ratio: p.position / p.duration, label: card.type === "movie" ? remaining : `S${e.season}:E${e.number} · ${remaining}` } };
+}
+
+function history(): HistoryEntry[] {
+  const records = [...progressLog].map(([episodeId, progress]) => ({ episodeId, progress, mediaId: episodeId.replace(/-(m|e\d+)$/, "") }))
+    .sort((a, b) => b.progress.updatedAt.localeCompare(a.progress.updatedAt) || b.episodeId.localeCompare(a.episodeId));
+  const counts = new Map<string, number>();
+  records.forEach(r => counts.set(r.mediaId, (counts.get(r.mediaId) ?? 0) + 1));
+  const seen = new Set<string>();
+  // Grouping is display-only: every episode record stays stored.
+  return records.filter(r => !settings.groupHistory || (!seen.has(r.mediaId) && !!seen.add(r.mediaId))).flatMap(r => {
+    const card = byId.get(r.mediaId), episode = episodesOf(r.mediaId).find(e => e.id === r.episodeId);
+    return card && episode ? [{ media: withProgress(card), episode, watchedAt: r.progress.updatedAt, ...(settings.groupHistory ? { groupedCount: counts.get(r.mediaId) } : {}) }] : [];
+  });
+}
 
 function detail(id: string): MediaDetail | null {
   const card = byId.get(id);
   if (!card) return null;
+  const episodes = episodesOf(id);
+  const target = continueOf(id)?.resume;
+  const playTarget = target ? { episodeId: target.episodeId, position: target.position, label: target.label } : { episodeId: episodes[0].id, position: 0, label: "재생" };
   if (id === "oshi") {
     return {
-      ...card, inWatchlist: watchlist.has(id),
+      ...withProgress(card), inWatchlist: watchlist.has(id),
       overview: "연예계의 빛과 그림자를 배경으로, 쌍둥이 남매가 어머니의 죽음에 얽힌 진실을 좇는다. 2.5차원 무대를 둘러싼 새로운 이야기가 시작된다.",
       rating: 8.6, cast: ["타카하시 리에", "오오츠카 유이"],
-      seasons: [{ number: 2, title: "시즌 2", episodes: oshiEpisodes }],
-      playTarget: { episodeId: "oshi-e3", position: 612, label: "이어보기 S2:E3" },
+      seasons: [{ number: 2, title: "시즌 2", episodes }],
+      playTarget,
       fileInfo: { container: "MKV", video: "HEVC 10bit", audio: "AAC 2.0", resolution: "1080p", size: 5_300_000_000 }
     };
   }
   const movie = card.type === "movie";
-  const episodes: Episode[] = movie
-    ? [{ id: `${id}-m`, mediaId: id, season: 1, number: 1, title: card.title, duration: 7680, thumb: card.backdrop }]
-    : Array.from({ length: card.episodeCount ?? 6 }, (_, i) => ({ id: `${id}-e${i + 1}`, mediaId: id, season: 1, number: i + 1, title: `${i + 1}화`, duration: 2700 }));
   return {
-    ...card, inWatchlist: watchlist.has(id),
+    ...withProgress(card), inWatchlist: watchlist.has(id),
     overview: movie ? "꿈을 좇는 두 사람이 로스앤젤레스에서 만나 사랑에 빠지지만, 성공이 가까워질수록 서로의 길이 엇갈리기 시작한다." : undefined,
     runtime: movie ? 7680 : undefined, rating: movie ? 8.0 : undefined,
     seasons: [{ number: 1, title: movie ? "영화" : "시즌 1", episodes }],
-    playTarget: { episodeId: episodes[0].id, position: id === "lalaland" ? 2380 : 0, label: id === "lalaland" ? "이어보기" : "재생" },
+    playTarget,
     fileInfo: id === "lalaland" ? { container: "MKV", video: "HEVC 10bit", audio: "E-AC3 5.1", resolution: "1080p", size: 2_800_000_000 } : undefined
   };
 }
 
 function home(type?: string): HomeResponse {
-  const pool = cards.filter(card => !type || card.type === type);
+  const pool = cards.filter(card => !type || card.type === type).map(withProgress);
+  const watched = (card: MediaCard) => Math.max(0, ...episodesOf(card.id).map(e => e.progress ? Date.parse(e.progress.updatedAt) : 0));
   const rows: Row[] = [
-    { id: "continue", title: "이어보기", kind: "continue", layout: "landscape", items: pool.filter(card => card.progress) },
+    { id: "continue", title: "이어보기", kind: "continue", layout: "landscape", items: pool.filter(card => card.resume).sort((a, b) => watched(b) - watched(a)) },
     { id: "watchlist", title: "볼 목록", kind: "watchlist", layout: "poster", items: pool.filter(card => watchlist.has(card.id)), more: { path: "/my-list" } },
     { id: "recent", title: "최근 추가된 작품", kind: "recent", layout: "poster", items: pool },
     { id: "anime", title: "애니메이션", kind: "media", layout: "poster", items: pool.filter(card => card.type === "anime"), more: { path: "/anime" } },
@@ -316,8 +371,14 @@ export function installMockApi() {
     if (path === "/search") { const q = (url.searchParams.get("q") ?? "").toLowerCase(); const hit = cards.filter(card => card.title.toLowerCase().includes(q)); return json({ query: q, groups: [{ provider: local, items: hit.filter(card => card.provider.id === "local") }, { provider: ext, items: hit.filter(card => card.provider.id !== "local") }] }); }
     if (path === "/watchlist") return json(cards.filter(card => watchlist.has(card.id)));
     if (path.startsWith("/watchlist/")) { const id = decodeURIComponent(path.slice(11)); watchlist = new Set(watchlist); if (method === "PUT") watchlist.add(id); else watchlist.delete(id); return json(null, 204); }
-    if (path === "/history") return json({ items: [], page: 1, hasNextPage: false });
-    if (path === "/progress") return json({ position: body.position, duration: body.duration, completed: false, updatedAt: new Date().toISOString() });
+    if (path === "/history") return json({ items: history(), page: 1, hasNextPage: false });
+    if (path.startsWith("/history/media/") && method === "DELETE") { episodesOf(decodeURIComponent(path.slice(15))).forEach(e => progressLog.delete(e.id)); return json(null, 204); }
+    if (path.startsWith("/history/") && method === "DELETE") { progressLog.delete(decodeURIComponent(path.slice(9))); return json(null, 204); }
+    if (path === "/progress") {
+      const saved = { position: body.position, duration: body.duration, completed: body.position >= body.duration * .9 || body.duration - body.position < 120, updatedAt: new Date().toISOString() };
+      progressLog.set(body.episodeId, saved);
+      return json(saved);
+    }
     if (path === "/playback" && method === "POST") { const session = playback(body.episodeId); return json({ ...session, subtitles: [...session.subtitles, ...(translatedTracks.get(body.episodeId) ?? [])] }); }
     const sessionFile = /^\/playback\/([^/]+)\/subtitles\/s0\.vtt$/.exec(path);
     if (sessionFile) {

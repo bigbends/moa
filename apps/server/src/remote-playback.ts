@@ -1,3 +1,4 @@
+import { parseInlineHls } from './inline-hls.js';
 import { APK_RELAY } from './apk-bridge.js';
 import { playbackMediaType } from './tmdb.js';
 import { parseEdl, edlPlaylist, edlMaster } from './edl.js';
@@ -13,7 +14,7 @@ import type { OnlineSubtitles } from './online.js';
 import { ApiFailure } from './util.js';
 
 const token = () => randomBytes(24).toString('base64url');
-interface Asset { url: string; headers: Record<string,string>; subtitle?: 'ass' | 'vtt'; playlist?: string; subtitleText?: string }
+interface Asset { url: string; headers: Record<string,string>; subtitle?: 'ass' | 'vtt'; playlist?: string; subtitleText?: string; binary?: Buffer }
 interface RemoteSession { leaseLost?: boolean; renewAt?: number; renewing?: boolean; renewFailures?: number; apkLease?: string; proxy?: string; profile: string; touched: number; assets: Map<string,Asset>; reverse: Map<string,string>; abort: AbortController; response: PlaybackSession }
 /** Parse cue boundaries even when an extension removes blank lines while decrypting SRT. */
 function subtitleVtt(text: string) {
@@ -74,6 +75,32 @@ export class RemotePlayback {
     }
     return `/api/playback/${id}/remote/${key}`;
   }
+  private inlineHls(id: string, s: RemoteSession, item: SourceVideo) {
+    let parsed: ReturnType<typeof parseInlineHls>;
+    try { parsed = parseInlineHls(item.url); } catch { throw new ApiFailure(502, 'unsupported-inline-hls'); }
+    const keys = new Map<string,string>();
+    for (const [url, binary] of parsed.keys) {
+      const key = token(); s.assets.set(key, { url: '', headers: {}, binary });
+      keys.set(url, `/api/playback/${id}/remote/${key}`);
+    }
+    // Credentials belong to the declared original resource, never every CDN in a playlist.
+    let origin: string | undefined;
+    try {
+      const original = new URL(item.originalUrl || '');
+      if (original.protocol === 'https:' && !original.username && !original.password) origin = original.origin;
+    } catch { /* Missing/invalid origins cannot authorize credential forwarding. */ }
+    // Inline playlists have no network base; every remote URI was required to be absolute HTTPS.
+    const body = rewritePlaylist(parsed.body, 'https://inline.invalid/', url => {
+      const key = keys.get(url); if (key) return key;
+      const headers = { ...item.headers };
+      if (new URL(url).origin !== origin) {
+        for (const name of Object.keys(headers)) if (/^(authorization|cookie)$/i.test(name)) delete headers[name];
+      }
+      return this.asset(id,s,{ url, headers });
+    });
+    const key = token(); s.assets.set(key, { url: '', headers: {}, playlist: body });
+    return `/api/playback/${id}/remote/${key}`;
+  }
   private edl(id: string, s: RemoteSession, item: SourceVideo) {
     const headers = item.headers || {};
     const playlist = (body: string) => {
@@ -130,7 +157,7 @@ export class RemotePlayback {
     });
     const saved = this.online?.saved(episodeId) || [];
     subtitles.unshift(...saved.map((row,i) => ({ ...this.online!.track(row, `/api/playback/${id}/subtitles/${row.id}.${row.format}`), default: i === 0 })));
-    state.response = { ...(videos.apkLease ? { runtimeDependent: true } : {}), sessionId: id, episodeId, mediaId: detail.id, mediaTitle: detail.title, mediaType: playbackMediaType(this.db, detail.id, detail.type), episodeTitle: ep.title, ...(live || detail.type === 'movie' ? {} : { episodeLabel: `S${ep.season}:E${ep.number}` }), live, streams: videos.map((v,i) => ({ id: String(i), label: v.quality || `서버 ${i+1}` })), streamId: String(index), mode: 'direct', mime, url: item.url.startsWith('edl://') ? this.edl(id,state,item) : this.asset(id,state,{ url: item.url, headers }), duration: ep.duration || 0, startPosition: live ? 0 : startOverride ?? (ep.progress?.completed ? 0 : ep.progress?.position || 0), subtitles, audioTracks: [], next: !live && next ? { episodeId: next.id, title: detail.title, label: next.title, thumb: next.thumb } : null };
+    state.response = { ...(videos.apkLease ? { runtimeDependent: true } : {}), sessionId: id, episodeId, mediaId: detail.id, mediaTitle: detail.title, mediaType: playbackMediaType(this.db, detail.id, detail.type), episodeTitle: ep.title, ...(live || detail.type === 'movie' ? {} : { episodeLabel: `S${ep.season}:E${ep.number}` }), live, streams: videos.map((v,i) => ({ id: String(i), label: v.quality || `서버 ${i+1}` })), streamId: String(index), mode: 'direct', mime, url: item.url.startsWith('data:') ? this.inlineHls(id,state,item) : item.url.startsWith('edl://') ? this.edl(id,state,item) : this.asset(id,state,{ url: item.url, headers }), duration: ep.duration || 0, startPosition: live ? 0 : startOverride ?? (ep.progress?.completed ? 0 : ep.progress?.position || 0), subtitles, audioTracks: [], next: !live && next ? { episodeId: next.id, title: detail.title, label: next.title, thumb: next.thumb } : null };
     this.sessions.set(id,state); return state.response;
     } catch(error) { this.sources.apk?.release(videos.apkLease); throw error; }
   }
@@ -146,6 +173,7 @@ export class RemotePlayback {
     const asset = s.assets.get(assetId);
     if (!asset) throw new ApiFailure(404,'asset-not-found');
     if(asset.subtitleText!==undefined)return reply.header('Cache-Control','private, no-store').header('X-Content-Type-Options','nosniff').type(asset.subtitle==='ass'?'text/x-ssa; charset=utf-8':'text/vtt; charset=utf-8').send(asset.subtitleText);
+    if (asset.binary) return reply.header('Cache-Control','private, no-store').header('X-Content-Type-Options','nosniff').type('application/octet-stream').send(asset.binary);
     if (asset.playlist) return reply.header('Cache-Control','private, no-store').type('application/vnd.apple.mpegurl').send(asset.playlist);
     if (req.headers.range && !/^bytes=\d*-\d*$/.test(req.headers.range)) return reply.code(416).send();
     const abort = new AbortController(), signal = AbortSignal.any([s.abort.signal,abort.signal]);
