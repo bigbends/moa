@@ -1,4 +1,5 @@
 import { SourceQueue, type SourceLane } from './source-queue.js';
+import { isInlineHls } from './inline-hls.js';
 import { SourceBrowser } from './source-browser.js';
 import { CacheStats } from './cache-stats.js';
 import { DetailPolicy } from './detail-policy.js';
@@ -554,7 +555,12 @@ export class Sources {
     return this.serial(mapping.source_id, async () => {
       const videos = await this.call(mapping.source_id, 'videos', { episodeUrl: mapping.url }) as ExtractedVideos;
       if (!Array.isArray(videos)) throw new ApiFailure(502, 'source-invalid-response');
-      const filtered: ExtractedVideos = videos.filter(v => v && typeof v.url === 'string' && (v.url.startsWith('edl://') || webUrl(v.url, ''))).slice(0, 32);
+      const filtered: ExtractedVideos = videos.filter(v => v && typeof v.url === 'string' && (v.url.startsWith('edl://') || webUrl(v.url, '') || isInlineHls(v.url))).slice(0, 32);
+      if (videos.length && !filtered.length) {
+        // No playback session will own this lease when all returned formats are rejected.
+        if (videos.apkLease) void this.apk.release(videos.apkLease);
+        throw new ApiFailure(502, 'unsupported-stream-format');
+      }
       filtered.apkLease = videos.apkLease; return filtered;
     }, 'interactive');
   }
