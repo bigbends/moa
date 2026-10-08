@@ -196,13 +196,17 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
   const titleLine = session ? [session.mediaTitle, session.episodeLabel && `${session.episodeLabel}${session.episodeTitle ? ` ${episodeTitle(session.episodeTitle)}` : ""}`].filter(Boolean) : [];
 
   /* ---------- progress ---------- */
-  const saveProgress = useCallback((keepalive = false) => {
-    const v = video.current;
+  const saveProgress = useCallback((keepalive = false, v = video.current) => {
     const position = castProgress.current?.position ?? v?.currentTime, duration = castProgress.current?.duration ?? v?.duration;
     if (!session || session.live || position === undefined || !Number.isFinite(duration) || !duration || position < 1) return;
     lastSaved.current = position;
-    void api("/progress", { method: "POST", body: { episodeId: session.episodeId, position, duration }, keepalive }).catch(() => {});
-  }, [session]);
+    void api("/progress", { method: "POST", body: { episodeId: session.episodeId, position, duration }, keepalive }).then(() => {
+      // Periodic saves mark caches stale; final saves also refresh screens already mounted after exit.
+      void client.invalidateQueries({ queryKey: ["home"], refetchType: keepalive ? "active" : "none" });
+      void client.invalidateQueries({ queryKey: ["history"], refetchType: keepalive ? "active" : "none" });
+      void client.invalidateQueries({ queryKey: ["media", session.mediaId], refetchType: keepalive ? "active" : "none" });
+    }).catch(() => {});
+  }, [session, client]);
 
   /* ---------- attach ---------- */
   useEffect(() => {
@@ -247,13 +251,11 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
     return () => {
       disposed = true;
       failPlayback.current = ()=>{};
-      saveProgress(true);
+      saveProgress(true, v);
       engine.current?.destroy();
       engine.current = null;
       subs.current?.destroy();
       subs.current = null;
-      void client.invalidateQueries({ queryKey: ["home"] });
-      void client.invalidateQueries({ queryKey: ["media", session.mediaId] });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
