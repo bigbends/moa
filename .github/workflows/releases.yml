@@ -1,0 +1,166 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: moa-release-publication
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate version and migration declaration
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module -e "import {version} from './scripts/release.mjs'; import fs from 'node:fs'; version(process.env.RELEASE_TAG); const p=JSON.parse(fs.readFileSync('deploy/release-policy.json')); if(p.version!==process.env.RELEASE_TAG) throw Error('Review release policy for this exact tag');"
+      - name: Require reviewed release notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: test -s "docs/releases/$RELEASE_TAG.md"
+      - run: corepack enable && pnpm install --frozen-lockfile
+      - run: pnpm --filter @moa/extensions --filter @moa/subtitles-ko --filter @moa/skip-markers build
+      - run: pnpm typecheck
+      - run: node --test scripts/update.test.mjs scripts/release.test.mjs scripts/release-updater.test.mjs scripts/install-release.test.mjs scripts/release-artifacts.test.mjs
+      - run: pnpm --filter @moa/server exec tsx --test test/updates.test.ts test/updates-release.test.ts test/source-session.test.ts test/source-browser.test.ts test/source-network.test.ts
+  image:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: moa
+            context: .
+            file: Dockerfile
+            platforms: linux/amd64,linux/arm64
+          - image: moa-auth
+            context: deploy/auth
+            file: deploy/auth/Dockerfile
+            platforms: linux/amd64,linux/arm64
+          - image: moa-connector
+            context: services/connector
+            file: services/connector/Dockerfile
+            platforms: linux/amd64,linux/arm64
+          - image: moa-apk
+            context: .
+            file: deploy/aniyomi/Dockerfile
+            platforms: linux/amd64,linux/arm64
+          - image: moa-source-browser
+            context: .
+            file: deploy/source-browser/Dockerfile
+            platforms: linux/amd64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Registry name
+        id: registry
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: echo "owner=${OWNER,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: ${{ matrix.platforms }}
+          push: true
+          # Staging tag is never a user update candidate. Public aliases follow publication.
+          tags: ghcr.io/${{ steps.registry.outputs.owner }}/${{ matrix.image }}:release-${{ github.run_id }}-${{ github.run_attempt }}
+          build-args: |
+            MOA_REVISION=${{ github.sha }}
+            MOA_VERSION=${{ github.ref_name }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ steps.registry.outputs.owner }}/${{ matrix.image }}:buildcache
+            type=gha,scope=${{ matrix.image }}
+          cache-to: type=registry,ref=ghcr.io/${{ steps.registry.outputs.owner }}/${{ matrix.image }}:buildcache,mode=max,ignore-error=true
+      - name: Record digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          mkdir -p release-digests
+          printf '%s\n' "$DIGEST" > "release-digests/$IMAGE.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.image }}
+          path: release-digests/*
+  publish:
+    needs: image
+    runs-on: ubuntu-latest
+    environment: releases
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: release-digests
+      - name: Reject reuse of a published version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" --json isDraft > existing-release.json 2>/dev/null; then
+            node -e "if(!require('./existing-release.json').isDraft) throw Error('Published releases are immutable');"
+          fi
+      - name: Prepare signed artifacts
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_PRIVATE_KEY: ${{ secrets.RELEASE_PRIVATE_KEY }}
+          RELEASE_PUBLIC_KEY: ${{ vars.RELEASE_PUBLIC_KEY }}
+        run: |
+          node scripts/publish-release.mjs
+          cd release-output
+          sha256sum release.json release.json.sig moa-release.json moa-install.tar.gz moa-install.tar.gz.sig > SHA256SUMS
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          args=()
+          latest=legacy
+          prerelease=false
+          if [[ "$TAG" == *-beta.* ]]; then args+=(--prerelease); latest=false; prerelease=true; fi
+          if ! gh release view "$TAG" --json isDraft >/dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --draft --notes-file "docs/releases/$TAG.md" "${args[@]}"
+          fi
+          gh release upload "$TAG" release-output/release.json release-output/release.json.sig release-output/moa-release.json release-output/moa-install.tar.gz release-output/moa-install.tar.gz.sig release-output/SHA256SUMS --clobber
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | .id")
+          test -n "$id"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -F draft=false -F prerelease="$prerelease" -f make_latest="$latest" > /dev/null
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote image aliases after publication
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/promote-release.mjs

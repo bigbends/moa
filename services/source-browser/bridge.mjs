@@ -12,7 +12,7 @@ export class EngineBridge {
     const env = {};
     for (const key of ['PATH', 'HOME', 'TMPDIR', 'XDG_CACHE_HOME', 'MOA_SOURCE_BROWSER_BINARY'])
       if (process.env[key]) env[key] = process.env[key];
-    env.INVPW_TRUE_HEADLESS = '1'; env.PYTHONUNBUFFERED = '1';
+    env.PYTHONUNBUFFERED = '1';
     const child = this.childFactory(this.python, ['-u', fileURLToPath(new URL('./engine.py', import.meta.url))],
       { env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
     this.child = child;

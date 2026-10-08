@@ -6,6 +6,7 @@ import { checkSubtitleAlignment } from '../player/subtitle-sync';
 import { preparePlayback, retirePlayback } from '../player/session-lifecycle';
 import { subtitlesOffForTitle, rememberSubtitlesOff, subtitleOffsetForTitle, rememberSubtitleOffset, subtitlePreference, rememberSubtitle, restoreSubtitle } from "../player/subtitle-preference";
 import { enterFullscreen } from "../lib/playback-fullscreen";
+import { documentPipSupported, useDocumentPip } from "../player/document-pip";
 import { devicePrefs, setDevicePref } from "../lib/device-prefs";
 import { isRemoteMode, type RemotePlayerEvent } from "../lib/remote";
 import { PlaybackSources } from '../components/PlaybackSources';
@@ -14,6 +15,7 @@ import {
   Play, Rewind, RotateCcw, RotateCw, Settings, Shuffle, SkipForward, SlidersHorizontal, Volume1, Volume2, VolumeX, X
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import type { OnlineSubtitleQuery, OnlineSubtitleSearch, PlaybackSession, SubtitleTrack } from "@moa/shared";
@@ -94,11 +96,16 @@ export function WatchPage() {
   useNoPageZoom();
   const { episodeId = "" } = useParams();
   const fullscreenHost = useRef<HTMLDivElement>(null);
+  // A stable portal slot can move into a Document PiP window without remounting the player.
+  const [slot] = useState(() => Object.assign(document.createElement("div"), { className: "watch-player-slot" }));
+  useLayoutEffect(() => { if (slot.ownerDocument === document) fullscreenHost.current?.append(slot); }, [slot]);
+  const pip = useDocumentPip(slot, fullscreenHost);
   // The fullscreen target survives episode changes; only playback state resets.
-  return <div className="watch-fullscreen-host" ref={fullscreenHost}><WatchPlayer key={episodeId} episodeId={episodeId} fullscreenHost={fullscreenHost} /></div>;
+  return <div className="watch-fullscreen-host" ref={fullscreenHost}>{createPortal(<WatchPlayer key={episodeId} episodeId={episodeId} fullscreenHost={fullscreenHost} pip={pip} />, slot)}</div>;
 }
 
-function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscreenHost: RefObject<HTMLDivElement | null> }) {
+function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeId: string; fullscreenHost: RefObject<HTMLDivElement | null>; pip: ReturnType<typeof useDocumentPip> }) {
+  const pipWindow = documentPip.pipWindow;
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const client = useQueryClient();
@@ -109,6 +116,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
   const media = useMedia(session?.mediaId ?? "");
 
   const root = useRef<HTMLDivElement>(null);
+  const active = () => (root.current?.ownerDocument ?? document).activeElement;
   const video = useRef<HTMLVideoElement>(null);
   const engine = useRef<EngineHandle | null>(null);
   const [airplayMedia, setAirplayMedia] = useState<CastMedia | null>(null);
@@ -639,7 +647,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
     window.clearTimeout(hideTimer.current);
     hideTimer.current = window.setTimeout(() => {
       if (!video.current?.paused && !root.current?.querySelector(".player-panel, dialog[open]")) {
-        if (isRemoteMode() && root.current?.contains(document.activeElement) && !document.activeElement?.closest(".translate-offer")) (document.activeElement as HTMLElement).blur();
+        if (isRemoteMode() && root.current?.contains(active()) && !active()?.closest(".translate-offer")) (active() as HTMLElement).blur();
         setChrome(false);
       }
     }, isRemoteMode() ? 6000 : HIDE_AFTER);
@@ -697,12 +705,20 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
   };
   const toggleMute = () => { const v = video.current; if (!v) return; v.muted = !v.muted; setMuted(v.muted); };
   const toggleFullscreen = useCallback(async () => {
+    if (pipWindow) return;
     if (document.fullscreenElement) { await document.exitFullscreen().catch(() => {}); return; }
     if (fullscreenHost.current) await enterFullscreen(fullscreenHost.current).catch(() => {});
-  }, []);
+  }, [pipWindow]);
   const pip = async () => {
     const v = video.current;
     if (!v) return;
+    if (pipWindow) { pipWindow.close(); return; }
+    if (documentPipSupported() && !document.pictureInPictureElement) {
+      if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+      const width = Math.min(960, Math.max(400, Math.round(window.innerWidth / 3)));
+      await documentPip.open(width, Math.round(width * (v.videoHeight || 9) / (v.videoWidth || 16))).catch(() => v.requestPictureInPicture().catch(() => {}));
+      return;
+    }
     if (document.pictureInPictureElement) await document.exitPictureInPicture().catch(() => {});
     else await v.requestPictureInPicture().catch(() => {});
   };
@@ -775,7 +791,7 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
     const onRemote = (raw: Event) => {
       const event = raw as RemotePlayerEvent, key = event.detail.key;
       if (event.defaultPrevented) return;
-      const inOffer = Boolean(document.activeElement?.closest(".translate-offer"));
+      const inOffer = Boolean(active()?.closest(".translate-offer"));
       const handled = () => event.preventDefault();
       if (key.startsWith("Media")) {
         const v=video.current;
@@ -793,18 +809,18 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
         else if (panel === "subs" && subsView !== "main") setSubsView("main");
         else if (panel) setPanel(null);
         else if (autopilot.offer && root.current?.querySelector(".translate-offer")) autopilot.dismiss();
-        else if (chrome) { (document.activeElement as HTMLElement)?.blur(); setChrome(false); }
+        else if (chrome) { (active() as HTMLElement)?.blur(); setChrome(false); }
         else back();
         handled(); return;
       }
       if (panel || sourcePicker) return;
       const sideways = key === "ArrowLeft" || key === "ArrowRight";
-      if (sideways && !live && !inOffer && (document.activeElement?.getAttribute("role") === "slider" || !chrome)) {
+      if (sideways && !live && !inOffer && (active()?.getAttribute("role") === "slider" || !chrome)) {
         nudgeSeek(key === "ArrowLeft" ? -1 : 1, event.detail.original.repeat); poke();
         if (!chrome) requestAnimationFrame(() => bar.current?.focus());
         handled(); return;
       }
-      if (!chrome && !inOffer && (key.startsWith("Arrow") || key === "Enter") && !(key === "Enter" && document.activeElement?.closest(".next-card,.player-error,.player-end,.player-chip,.player-skip"))) {
+      if (!chrome && !inOffer && (key.startsWith("Arrow") || key === "Enter") && !(key === "Enter" && active()?.closest(".next-card,.player-error,.player-end,.player-chip,.player-skip"))) {
         poke(); requestAnimationFrame(()=>root.current?.querySelector<HTMLElement>(".center-play")?.focus());
         handled(); return;
       }
@@ -835,14 +851,24 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
       else if (key === "m") toggleMute();
       else if (key === "n") goNext();
       else if (key === "c") chooseSubtitle(subtitle ? null : allSubs[0] ?? null);
-      else if (key === "escape") { if (panel) setPanel(null); else if (!document.fullscreenElement) back(); }
+      else if (key === "escape") { if (panel) setPanel(null); else if (!document.fullscreenElement && !pipWindow) back(); }
       else if (/^[0-9]$/.test(key)) seekTo((Number(key) / 10) * (v.duration || total));
       else return;
       if (handled) { event.preventDefault(); poke(); }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    pipWindow?.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("keydown", onKey); pipWindow?.removeEventListener("keydown", onKey); };
   });
+
+  // Observers created by this window do not follow the player into the PiP window's rendering loop.
+  useEffect(() => {
+    if (!pipWindow) return;
+    const relayout = () => subs.current?.refreshLayout();
+    pipWindow.addEventListener("resize", relayout);
+    relayout();
+    return () => { pipWindow.removeEventListener("resize", relayout); requestAnimationFrame(() => subs.current?.refreshLayout()); };
+  }, [pipWindow]);
 
   useEffect(() => {
     const onFs = () => {
@@ -886,11 +912,11 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
       setFillScale(Math.max(screenRatio / videoRatio, videoRatio / screenRatio));
     };
     update();
-    const observer = new ResizeObserver(update);
+    const observer = new ((r.ownerDocument.defaultView ?? window) as typeof window).ResizeObserver(update);
     observer.observe(r);
     v.addEventListener("loadedmetadata", update);
     return () => { observer.disconnect(); v.removeEventListener("loadedmetadata", update); };
-  }, [fill, session]);
+  }, [fill, session, pipWindow]);
   const distance = () => { const [a, b] = [...pointers.current.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
   useEffect(() => () => { window.clearTimeout(tapTimer.current); window.clearTimeout(pressTimer.current); }, []);
 
@@ -1206,8 +1232,8 @@ function WatchPlayer({ episodeId, fullscreenHost }: { episodeId: string; fullscr
               <button className={cx("icon-btn icon-btn-l", panel === "subs" && "is-active")} aria-label="자막 및 음성" title="자막 및 음성 (C)" onClick={() => setPanel(panel === "subs" ? null : "subs")}><Captions size={26} /></button>
             )}
             <button className={cx("icon-btn icon-btn-l", panel === "settings" && "is-active")} aria-label="재생 설정" title="재생 설정" onClick={() => setPanel(panel === "settings" ? null : "settings")}><Settings size={26} /></button>
-            {"pictureInPictureEnabled" in document && <button className="icon-btn icon-btn-l hide-mobile" aria-label="PIP" title="PIP" onClick={() => void pip()}><PictureInPicture2 size={26} /></button>}
-            <button className="icon-btn icon-btn-l" aria-label="전체 화면 (F)" title="전체 화면 (F)" onClick={() => void toggleFullscreen()}>{fullscreen ? <Minimize size={26} /> : <Maximize size={26} />}</button>
+            {("pictureInPictureEnabled" in document || documentPipSupported()) && <button className={cx("icon-btn icon-btn-l hide-mobile", pipWindow && "is-active")} aria-label={pipWindow ? "PIP 닫기" : "PIP"} title={pipWindow ? "PIP 닫기" : "PIP"} onClick={() => void pip()}><PictureInPicture2 size={26} /></button>}
+            {!pipWindow && <button className="icon-btn icon-btn-l" aria-label="전체 화면 (F)" title="전체 화면 (F)" onClick={() => void toggleFullscreen()}>{fullscreen ? <Minimize size={26} /> : <Maximize size={26} />}</button>}
           </div>
         </div>
       </footer>

@@ -14,8 +14,8 @@ import engine
 
 async def main():
     if '--engine' in sys.argv:
-        from invisible_playwright.async_api import InvisiblePlaywright
-        class TestLauncher(InvisiblePlaywright):
+        from camoufox.async_api import AsyncCamoufox
+        class TestLauncher(AsyncCamoufox):
             async def __aenter__(self):
                 browser = await super().__aenter__()
                 original = browser.new_context

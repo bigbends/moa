@@ -79,7 +79,7 @@ async function hlsSupported() {
 
 /* ---------- Subtitles ---------- */
 
-type Jassub = Pick<import("jassub").default, "destroy" | "ready" | "timeOffset" | "renderer" | "_demandRender" | "_lastDemandTime">;
+type Jassub = Pick<import("jassub").default, "destroy" | "ready" | "timeOffset" | "renderer" | "resize" | "_demandRender" | "_lastDemandTime">;
 type AssStyle = Awaited<ReturnType<Jassub["renderer"]["getStyles"]>>[number];
 export type SubtitleAppearance = { size: "small" | "medium" | "large" | "xlarge"; background: "original" | "none" | "soft" | "solid" };
 
@@ -310,6 +310,12 @@ export class SubtitleController {
   setHeight(percent: number) {
     this.height = Math.max(0, Math.min(30, Number.isFinite(percent) ? percent : 0));
     this.setLift(this.lifted);
+  }
+
+  /** Re-measure after the video moves to another window, where this window's observers no longer fire. */
+  refreshLayout() {
+    this.setLift(this.lifted);
+    if (this.ass) void Promise.resolve(this.ass.resize()).catch(() => {});
   }
 
   /** Raise VTT cues above the control bar while it is visible. */

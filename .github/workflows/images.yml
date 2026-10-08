@@ -1,8 +1,6 @@
 name: Container images
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
+  # Development images are opt-in; release tags build and publish release images.
   workflow_dispatch:
 permissions:
   contents: read
@@ -18,17 +16,25 @@ jobs:
       matrix:
         include:
           - image: moa
+            platforms: linux/amd64,linux/arm64
             context: .
             file: Dockerfile
           - image: moa-auth
+            platforms: linux/amd64,linux/arm64
             context: deploy/auth
             file: deploy/auth/Dockerfile
           - image: moa-connector
+            platforms: linux/amd64,linux/arm64
             context: services/connector
             file: services/connector/Dockerfile
           - image: moa-apk
+            platforms: linux/amd64,linux/arm64
             context: .
             file: deploy/aniyomi/Dockerfile
+          - image: moa-source-browser
+            platforms: linux/amd64
+            context: .
+            file: deploy/source-browser/Dockerfile
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -38,22 +44,28 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Registry name
+        id: registry
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: echo "owner=${OWNER,,}" >> "$GITHUB_OUTPUT"
       - uses: docker/metadata-action@v5
         id: meta
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=tag
+            type=raw,value=edge,enable={{is_default_branch}}
             type=sha
       - uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platforms }}
           push: true
           build-args: MOA_REVISION=${{ github.sha }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ steps.registry.outputs.owner }}/${{ matrix.image }}:buildcache
+            type=gha,scope=${{ matrix.image }}
+          cache-to: type=registry,ref=ghcr.io/${{ steps.registry.outputs.owner }}/${{ matrix.image }}:buildcache,mode=max,ignore-error=true

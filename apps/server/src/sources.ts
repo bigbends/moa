@@ -15,6 +15,7 @@ import { ApiFailure, now } from './util.js';
 const key = (...parts: string[]) => createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 40);
 const text = (value: unknown, max = 500) => typeof value === 'string' ? value.slice(0, max) : '';
 const webUrl = (value: unknown, base: string) => { try { if (!text(value, 8192)) return undefined; const u = new URL(text(value, 8192), base || undefined); return /^https?:$/.test(u.protocol) && !u.username && !u.password ? u.href : undefined; } catch { return undefined; } };
+type ImageBatch = { urls: Map<string,((bytes?: Buffer) => void)[]>; timer?: NodeJS.Timeout };
 const hostPreference = (key: string) => key === '__moa_proxy' || key === '__moa_browser';
 const guestPreferences = (values: Record<string, unknown>) => Object.fromEntries(Object.entries(values).filter(([key]) => !hostPreference(key))) as PreferenceValues;
 export class Sources {
@@ -63,6 +64,7 @@ export class Sources {
     let value: string; try { value = parseOutboundProxy(proxy) || ''; } catch { throw new ApiFailure(400,'invalid-proxy-address'); }
     if (this.network().revision !== revision) throw new ApiFailure(409,'network-settings-conflict');
     this.db.run('INSERT OR REPLACE INTO server_network VALUES(1,?,?)',value,revision+1);
+    for (const row of this.db.all("SELECT s.id FROM source_entries s LEFT JOIN source_network n ON n.source_id=s.id WHERE COALESCE(n.proxy,'')=''")) this.browser.clear(row.id);
     for (const row of this.db.all('SELECT DISTINCT source_id FROM source_image_owners')) this.isolateImages(row.source_id);
     this.reads.clear(); this.db.run('DELETE FROM source_detail_observations'); this.db.run('UPDATE source_media SET detail_at=0');
     return this.network();
@@ -178,7 +180,7 @@ export class Sources {
           this.db.run('DELETE FROM source_health WHERE source_id=?', id);
           this.db.run('DELETE FROM source_network WHERE source_id=?', id);
           this.db.run("UPDATE source_entries SET code=NULL,installed_entry=NULL,sha256=NULL,preferences='{}',enabled=0 WHERE id=?", id);
-          this.invalidate(id);
+          this.browser.clear(id); this.invalidate(id);
         }
         this.db.removeNavigationSources(new Set(unique));
         // Images may be shared by several sources; retain any still referenced by a catalog item.
@@ -232,7 +234,7 @@ export class Sources {
         if(row.code && (row.sha256 !== fetched.sha256 || JSON.parse(row.installed_entry).version !== entry.version)) this.db.run('INSERT OR REPLACE INTO source_backups VALUES(?,?,?,?,?)',id,row.installed_entry,row.code,row.sha256 || '',row.preferences);
         this.db.run('UPDATE source_entries SET code=?,sha256=?,installed_entry=?,enabled=1 WHERE id=?', fetched.source, fetched.sha256, row.entry, id);
       });
-      this.invalidate(id); return this.list().find(s => s.id === id)!;
+      this.browser.clear(id); this.invalidate(id); return this.list().find(s => s.id === id)!;
     });
   }
   rollback(id:string) {
@@ -245,7 +247,7 @@ export class Sources {
         this.db.run('DELETE FROM source_backups WHERE source_id=?',id);
         this.db.run('DELETE FROM source_health WHERE source_id=?',id);
       });
-      this.invalidate(id);return this.list().find(s=>s.id===id)!;
+      this.browser.clear(id); this.invalidate(id);return this.list().find(s=>s.id===id)!;
     });
   }
   async diagnose(id:string,profile:string) {
@@ -272,6 +274,7 @@ export class Sources {
         this.db.run('UPDATE media SET type=?,metadata=? WHERE id=?', values.type || m.type, JSON.stringify(meta), m.id);
       }
     });
+    if (values.enabled === false) this.browser.clear(id);
     this.invalidate(id); return this.list().find(s => s.id === id)!;
   }
   private async call(id: string, action: string, params: Record<string, unknown> = {}) {
@@ -317,12 +320,12 @@ export class Sources {
       const saveHost = () => {
         if (!changes || !Object.keys(changes).some(hostPreference)) return;
         this.db.run('INSERT INTO source_network VALUES(?,?,?) ON CONFLICT(source_id) DO UPDATE SET proxy=excluded.proxy,browser=excluded.browser',id,proxy,Number(browser));
-        this.isolateImages(id); this.invalidate(id);
+        this.browser.clear(id); this.isolateImages(id); this.invalidate(id);
       };
       const hostFields = (): SourcePreference[] => [
         { key:'__moa_proxy', title:'개별 프록시', kind:'text', secret:false, value:proxy, summary:'비워 두면 서버 기본 프록시를 사용합니다. http://, https://, socks5:// 주소를 입력할 수 있습니다.' },
-        ...(js ? [{ key:'__moa_browser', title:'소스 브라우저 사용 - 실험', kind:'boolean' as const, secret:false, value:browser, disabled:!this.browser.configured,
-          summary:this.browser.configured ? '브라우저 호출을 지원하는 확장에서만 동작합니다. 사이트에 따라 느리거나 실패할 수 있습니다.' : '서버에 소스 브라우저 서비스가 설정되지 않았습니다.' }] : []),
+        ...(js ? [{ key:'__moa_browser', title:'브라우저 인증 사용', kind:'boolean' as const, secret:false, value:browser, disabled:!this.browser.configured,
+          summary:this.browser.configured ? '사이트 인증과 페이지 실행에 브라우저를 사용합니다.' : '서버에 소스 브라우저 서비스가 설정되지 않았습니다.' }] : []),
       ];
       if (entry.format === 'aniyomi-apk') return this.serial('apk:'+row.repository+':'+entry.package.pkg, async () => {
         const mapping = this.db.get('SELECT package_id FROM source_apk WHERE source_id=?',id);
@@ -339,7 +342,7 @@ export class Sources {
           if (p.kind === 'boolean' ? typeof v !== 'boolean' : p.kind === 'select' ? !p.choices?.some(c => c.value === v) : p.kind === 'multi-select' ? !Array.isArray(v) || v.some(x => !p.choices?.some(c => c.value === x)) : typeof v !== 'string' || v.length > 8192) throw new ApiFailure(400, 'invalid-source-preference');
         }
         const state = { ...guestPreferences(JSON.parse(this.row(id).preferences)), ...guestChanges }; validatePreferenceState(state);
-        this.db.run('UPDATE source_entries SET preferences=? WHERE id=?', JSON.stringify(state), id); this.invalidate(id);
+        this.db.run('UPDATE source_entries SET preferences=? WHERE id=?', JSON.stringify(state), id); this.browser.clear(id); this.invalidate(id);
       }
       saveHost();
       const state = JSON.parse(this.row(id).preferences);
@@ -373,21 +376,49 @@ export class Sources {
     const proxies = new Set(owners.map(owner=>this.proxy(owner.source_id)));
     if (proxies.size !== 1) throw new ApiFailure(502,'image-proxy-conflict');
     const proxy = this.proxy(owners[0].source_id), headers = JSON.parse(row.headers);
-    const result = await transport({url:row.url,headers},this.abort.signal,[],8*1024*1024,proxy);
+    const sessionOwner = owners.find(o => this.db.get('SELECT browser FROM source_network WHERE source_id=?',o.source_id)?.browser);
+    let bootstrap: string | undefined;
+    try { const ref = new URL(headers.Referer || headers.referer || row.url); if (ref.origin === new URL(row.url).origin) bootstrap = ref.href; } catch {}
+    const result = sessionOwner && this.browser.configured && bootstrap && transport === compatibilityHttp && this.browser.sessions.has(sessionOwner.source_id,proxy,row.url)
+      ? await this.browser.sessions.request(sessionOwner.source_id,proxy,{url:row.url,headers,options:{browserSession:{url:bootstrap}}},this.abort.signal,8*1024*1024)
+      : await transport({url:row.url,headers},this.abort.signal,[],8*1024*1024,proxy);
     if (result.statusCode === 200) return result.bytes;
     // Sites behind a browser challenge reject plain image requests; reuse the owner's browser session.
     const owner = owners.find(o => this.db.get('SELECT browser FROM source_network WHERE source_id=?',o.source_id)?.browser);
     if (owner && this.browser.configured) {
-      const bytes = await this.browserImage(owner.source_id,proxy,row.url,headers).catch(() => undefined);
+      const bytes = await this.browserImage(owner.source_id,proxy,row.url,headers);
       if (bytes) return bytes;
     }
     throw new ApiFailure(502,'image-unavailable');
   }
-  private async browserImage(sourceId: string, proxy: string | undefined, url: string, headers: Record<string,string>) {
-    const script = `(async()=>{const r=await fetch(location.href,{credentials:'include'});const t=r.headers.get('content-type')||'';if(!r.ok||!t.startsWith('image/'))return null;const b=new Uint8Array(await r.arrayBuffer());if(b.length>3145728)return null;let s='';for(let i=0;i<b.length;i+=32768)s+=String.fromCharCode.apply(null,b.subarray(i,i+32768));return btoa(s);})()`;
-    const data = await this.browser.evaluate(sourceId,proxy,{url,headers,script,waitUntil:'load',timeoutMs:45_000},this.abort.signal);
-    if (typeof data !== 'string' || !data || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return undefined;
-    return Buffer.from(data,'base64');
+  private imageBatches = new Map<string,ImageBatch>();
+  private browserImage(sourceId: string, proxy: string | undefined, url: string, headers: Record<string,string>) {
+    let origin: string;
+    try { origin = new URL(url).origin; } catch { return Promise.resolve(undefined); }
+    // Posters arrive in bursts; collect them per session and origin so one page fetches them in parallel.
+    const key = JSON.stringify([sourceId,proxy||'',origin,headers]);
+    let batch = this.imageBatches.get(key);
+    if (!batch) {
+      const created: ImageBatch = { urls: new Map() };
+      created.timer = setTimeout(() => void this.flushImages(key,created,sourceId,proxy,headers), 50);
+      this.imageBatches.set(key,batch = created);
+    }
+    const target = batch;
+    const done = new Promise<Buffer | undefined>(resolve => target.urls.set(url,[...(target.urls.get(url) || []),resolve]));
+    if (target.urls.size >= 24) { clearTimeout(target.timer); void this.flushImages(key,target,sourceId,proxy,headers); }
+    return done;
+  }
+  private async flushImages(key: string, batch: ImageBatch, sourceId: string, proxy: string | undefined, headers: Record<string,string>) {
+    if (this.imageBatches.get(key) === batch) this.imageBatches.delete(key);
+    const urls = [...batch.urls.keys()];
+    const script = `(async()=>{let budget=2900000;return Promise.all(${JSON.stringify(urls)}.map(async u=>{try{const r=await fetch(u,{credentials:'include'});const t=r.headers.get('content-type')||'';if(!r.ok||!t.startsWith('image/'))return null;const b=new Uint8Array(await r.arrayBuffer());if(b.length>budget)return null;budget-=b.length;let s='';for(let i=0;i<b.length;i+=32768)s+=String.fromCharCode.apply(null,b.subarray(i,i+32768));return btoa(s);}catch{return null}}));})()`;
+    let data: unknown;
+    try { data = await this.browser.evaluate(sourceId,proxy,{url:urls[0],headers,script,waitUntil:'load',timeoutMs:45_000},this.abort.signal); } catch {}
+    urls.forEach((url,index) => {
+      const value = Array.isArray(data) ? data[index] : undefined;
+      const bytes = typeof value === 'string' && value && /^[A-Za-z0-9+/]+={0,2}$/.test(value) ? Buffer.from(value,'base64') : undefined;
+      for (const resolve of batch.urls.get(url)!) resolve(bytes);
+    });
   }
   private putItem(sourceId: string, item: SourceItem) {
     const r = this.row(sourceId), entry: MangayomiEntry = JSON.parse(r.installed_entry);
@@ -527,5 +558,5 @@ export class Sources {
       filtered.apkLease = videos.apkLease; return filtered;
     }, 'interactive');
   }
-  async close() { this.abort.abort(); await Promise.allSettled([...this.reading.values()].flatMap(readers=>[...readers])); await this.reads.drain(); await this.queues.drain(); }
+  async close() { this.abort.abort(); this.browser.close(); await Promise.allSettled([...this.reading.values()].flatMap(readers=>[...readers])); await this.reads.drain(); await this.queues.drain(); }
 }
