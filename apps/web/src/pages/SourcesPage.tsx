@@ -7,7 +7,7 @@ import { ArrowLeft, ChevronRight, Plus, Radio, RefreshCw, Search, Settings2, Tra
 import type { BrowseSelection, MediaCard, MediaType, Page, SourcePreference, SourceRemovalImpact, SourceRemovalResult, VideoSource } from '@moa/shared';
 import { api, ApiError, sized } from '../lib/api';
 import { useMe } from '../api/queries';
-import { Button, ButtonLink, EmptyState, IconButton, Select, Skeleton, Spinner } from '../components/ui';
+import { Button, ButtonLink, EmptyState, IconButton, ScrollLoader, Select, Skeleton, Spinner } from '../components/ui';
 import { LandscapeCard, PosterCard } from '../components/Cards';
 import { Row, RowSkeleton } from '../components/Row';
 import { cx } from '../lib/format';
@@ -56,7 +56,7 @@ export function SourceBrowsePage() {
     {rawFilters && !selection && <p role="alert">저장된 필터 주소를 읽을 수 없습니다. <button className="text-btn" onClick={() => { const next=new URLSearchParams(params); next.delete('filters'); setParams(next, { replace: true }); }}>조건 초기화</button></p>}
     <details className="browse-filters"><summary>필터와 정렬{selection?.filters?.length ? ' · 적용 중' : ''}</summary>{schema.data ? <><SourceFilters schema={schema.data} value={draft} onChange={setDraft}/><Button variant="primary" onClick={() => { const next=new URLSearchParams(params); if(draft) next.set('filters',JSON.stringify(draft)); else next.delete('filters'); setParams(next, { replace: true }); }}>조건 적용</Button></> : <p>{schema.isPending ? '불러오는 중…' : '필터를 불러오지 못했습니다.'}</p>}</details>
     {term && <p className="source-muted">“{term}” 검색 결과 · {items.length}개{query.hasNextPage ? " 이상" : ""}</p>}
-    {sources.isSuccess && !source?.enabled ? <EmptyState title={admin ? "소스를 켜 주세요" : "지금은 쓸 수 없는 소스예요"} body={admin ? undefined : "관리자가 이 소스를 끄거나 지웠어요."} action={admin ? <ButtonLink to="/sources">소스 관리</ButtonLink> : undefined} /> : query.isPending ? <RowSkeleton /> : <><div className={cx("grid", source?.live && "live-grid")}>{items.map(card => source?.live ? <LandscapeCard card={card} key={card.id}/> : <PosterCard card={card} key={card.id}/>)}</div>{query.isError && <EmptyState title="목록을 불러오지 못했습니다" body={rawFilters ? "확장 업데이트로 조건이 달라졌을 수 있습니다. 필터를 초기화하거나 다시 선택해 주세요." : message} action={<Button onClick={() => void query.refetch()}>다시 시도</Button>} />}{!items.length && !query.isError && <EmptyState title="표시할 작품이 없습니다"/>}{query.hasNextPage && <div className="source-more"><Button disabled={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>{query.isFetchingNextPage ? '불러오는 중…' : '더 보기'}</Button></div>}</>}
+    {sources.isSuccess && !source?.enabled ? <EmptyState title={admin ? "소스를 켜 주세요" : "지금은 쓸 수 없는 소스예요"} body={admin ? undefined : "관리자가 이 소스를 끄거나 지웠어요."} action={admin ? <ButtonLink to="/sources">소스 관리</ButtonLink> : undefined} /> : query.isPending ? <RowSkeleton /> : <><div className={cx("grid", source?.live && "live-grid")}>{items.map(card => source?.live ? <LandscapeCard card={card} key={card.id}/> : <PosterCard card={card} key={card.id}/>)}</div>{query.isError && <EmptyState title="목록을 불러오지 못했습니다" body={rawFilters ? "확장 업데이트로 조건이 달라졌을 수 있습니다. 필터를 초기화하거나 다시 선택해 주세요." : message} action={<Button onClick={() => void (query.isFetchNextPageError ? query.fetchNextPage() : query.refetch())}>다시 시도</Button>} />}{!items.length && !query.isError && <EmptyState title="표시할 작품이 없습니다"/>}<ScrollLoader hasMore={query.hasNextPage} loading={query.isFetching} failed={query.isError} onLoad={query.fetchNextPage} /></>}
   </div>;
 }
 /** Mirrors the server's host preference keys; everything else belongs to the extension. */

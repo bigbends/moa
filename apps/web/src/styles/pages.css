@@ -193,6 +193,9 @@
 
 /* ---------- Settings ---------- */
 .settings-page { max-width: 760px; }
+.settings-category { width: 100%; margin-bottom: 24px; }
+.settings-category .dropdown-trigger { height: 48px; justify-content: space-between; }
+.page, .settings-panel { animation: fade .18s var(--ease); }
 .settings-group { margin-bottom: 36px; scroll-margin-top: calc(var(--nav-h) + 20px); }
 .settings-group > h2, .settings-group-head h2 { font-size: .86rem; font-weight: 700; color: var(--text-3); margin: 0 0 10px 4px; letter-spacing: .02em; }
 .settings-group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
@@ -364,7 +367,7 @@
 .source-choice { display:flex; align-items:center; gap:10px; margin:10px 0; }
 .source-toolbar { display:flex; gap:20px; align-items:center; margin-bottom:24px; flex-wrap:wrap; }
 .source-toolbar label { display:flex; gap:10px; align-items:center; }
-.source-more { display:flex; justify-content:center; padding:32px; }
+.source-more { display:flex; align-items:center; justify-content:center; gap:10px; min-height:84px; padding:32px; color:var(--text-3); }
 .source-row-error { margin:20px var(--page-pad, 4vw); padding:24px; border:1px solid #ffffff12; border-radius:12px; }
 .source-row-error h2 { font-size:20px; margin:0 0 12px; }
 .source-row-error span { color:#a1a1aa; margin-right:20px; }

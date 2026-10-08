@@ -16,6 +16,7 @@ import { createReadStream } from 'node:fs';
 import { access, readdir, stat, rm } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
+import { ACCOUNT_PERMISSIONS } from '@moa/shared';
 import type { Account, Profile, Settings, MediaType, ClientCapabilities, NavigationTab, DefaultNavigationUpdate } from '@moa/shared';
 import { config as makeConfig, type Config } from './config.js';
 import { DEFAULT_SETTINGS, Store } from './db.js';
@@ -100,7 +101,7 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
   const online = new OnlineSubtitles(db, value => app.log.info(value), services.subtitleClient);
   const jimaku = new Jimaku(db, catalog, services.jimakuFetch);
   const translations = new Translations(db, catalog, cfg.dataDir, new Gemini(services.translationFetch));
-  const subtitleLibrary = new SubtitleLibrary(db, catalog, translations, online);
+  const subtitleLibrary = new SubtitleLibrary(db, catalog, translations, online, groups);
   const remotePlayback = new RemotePlayback(db, catalog, sources, undefined, online);
   const enrichment = new Enrichment(db, cfg, online, value => app.log.info(value), services);
   const library = new Library(db, cfg, message => app.log.warn(message), () => enrichment.schedule());
@@ -132,22 +133,29 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
     if (!url.startsWith('/api/') || url === '/api/health') return;
     if (url.startsWith('/api/cast/') && ['GET', 'HEAD', 'OPTIONS'].includes(req.method)) { casting.authorize(req); return; }
     const id = req.headers['x-moa-account'], role = req.headers['x-moa-role'];
-    if (id === undefined && role === undefined && !cfg.requireAccount) req.moaAccount = { id: 'local', username: 'local', role: 'admin' };
+    if (id === undefined && role === undefined && !cfg.requireAccount) req.moaAccount = { id: 'local', username: 'local', role: 'admin', permissions: [...ACCOUNT_PERMISSIONS] };
     else {
       if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(id) || !['admin', 'member'].includes(String(role))) throw new ApiFailure(401, 'login-required');
       let username = '';
       try { username = decodeURIComponent(String(req.headers['x-moa-username'] ?? '')); } catch { throw new ApiFailure(401, 'login-required'); }
-      req.moaAccount = { id, username, role: role as Account['role'] };
+      const raw = req.headers['x-moa-permissions'];
+      if (raw !== undefined && (typeof raw !== 'string' || raw.split(',').some(value => value && !ACCOUNT_PERMISSIONS.includes(value as Account['permissions'][number])))) throw new ApiFailure(401, 'login-required');
+      const permissions = role === 'admin' ? [...ACCOUNT_PERMISSIONS] : ACCOUNT_PERMISSIONS.filter(value => typeof raw === 'string' && raw.split(',').includes(value));
+      req.moaAccount = { id, username, role: role as Account['role'], permissions };
     }
     if (req.moaAccount.role === 'admin') db.claimProfiles(req.moaAccount.id);
     const route = url;
-    const admin = route.startsWith('/api/admin/') || route.startsWith('/api/network') || route.startsWith('/api/library/') ||
+    const admin = route.startsWith('/api/admin/') || route === '/api/plugins' || route.startsWith('/api/plugins/') || route.startsWith('/api/network') || route.startsWith('/api/library/') ||
       route.startsWith('/api/source-repositories') || route === '/api/sources/refresh' || route === '/api/sources/remove' ||
       route === '/api/sources/:id/removal-impact' || req.method === 'DELETE' && route === '/api/sources/:id' ||
       /^\/api\/sources\/:id\/(install|rollback|check|preferences)$/.test(route) ||
       req.method === 'PATCH' && (route === '/api/sources/:id' || route === '/api/media/:id/metadata') ||
       req.method === 'DELETE' && route === '/api/episodes/:id/subtitles/:subtitleId';
     if (admin && req.moaAccount.role !== 'admin') throw new ApiFailure(403, 'admin-required');
+    const permission = req.method !== 'DELETE' && (route.startsWith('/api/playback') || route === '/api/episodes/:id/subtitles/preference') ? 'video.watch'
+      : req.method === 'POST' && (route.endsWith('/translate') || route === '/api/translations/:id/priority') ? 'subtitles.translate'
+      : req.method === 'POST' && (route === '/api/subtitles/import' || route === '/api/episodes/:id/subtitles/online') ? 'subtitles.add' : null;
+    if (permission && !req.moaAccount.permissions.includes(permission)) throw new ApiFailure(403, 'permission-denied');
     const sessionAsset = ['GET','HEAD'].includes(req.method) && /^\/api\/playback\/[^/]+\//.test(url);
     const scoped = !(/^\/api\/(me$|profiles(?:\/|$)|admin\/|images\/)/.test(url)) && !sessionAsset;
     const header = req.headers['x-moa-profile'];
@@ -196,7 +204,7 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
   app.get('/api/admin/translation/models', async () => translations.models());
   app.post('/api/admin/translation/keys/:id/test', { schema: { params: object({ id: { type: 'string', pattern: '^[a-f0-9]{16}$' } }, ['id']) } }, async req => translations.testKey(params(req).id));
   app.post('/api/episodes/:id/subtitles/translate', { bodyLimit: 2 * 1024 * 1024, schema: { params: idParams(), body: object({ content: { type: 'string', minLength: 1, maxLength: 1024 * 1024 }, format: { type: 'string', enum: ['ass','vtt','srt','smi'] }, sourceLabel: { type: 'string', maxLength: 200 }, sourceLanguage: { type: 'string', maxLength: 32 }, startAt: {type: 'number', minimum: 0, maximum: 864000} }, ['content','format','sourceLabel']) } }, async req => translations.start(params(req).id, profile(req), req.body as Parameters<Translations['start']>[2]));
-  app.get('/api/episodes/:id/subtitles/translations', { schema: { params: idParams() } }, async req => translations.tracks(params(req).id, profile(req)));
+  app.get('/api/episodes/:id/subtitles/translations', { schema: { params: idParams() } }, async req => subtitleLibrary.tracks(params(req).id, profile(req), 'translation'));
   app.get('/api/translations/:id', { schema: { params: idParams() } }, async req => translations.get(params(req).id, profile(req)));
   app.post('/api/translations/:id/priority', {schema: {params: idParams(), body: object({startAt: {type: 'number', minimum: 0, maximum: 864000}}, ['startAt'])}}, async (req, reply) => { translations.priority(params(req).id, profile(req), (req.body as {startAt: number}).startAt); return reply.code(204).send(); });
   app.delete('/api/translations/:id', { schema: { params: idParams() } }, async (req, reply) => { translations.cancel(params(req).id, profile(req)); return reply.code(204).send(); });
@@ -383,7 +391,12 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
     const body = req.body as { episodeId: string; filename: string; data: string };
     return subtitleLibrary.import(body.episodeId, profile(req), body.filename, body.data);
   });
-  app.get('/api/episodes/:id/subtitles/uploads', { schema: { params: idParams() } }, async req => subtitleLibrary.uploads(params(req).id, profile(req)));
+  app.get('/api/episodes/:id/subtitles/uploads', { schema: { params: idParams() } }, async req => subtitleLibrary.tracks(params(req).id, profile(req), 'upload'));
+  app.get('/api/episodes/:id/subtitles/preference', { schema: { params: idParams() } }, async (req, reply) => reply.header('Cache-Control', 'private, no-store').send(subtitleLibrary.preference(params(req).id, profile(req))));
+  app.put('/api/episodes/:id/subtitles/preference', { schema: { params: idParams(), body: object({ choice: { anyOf: [{ type: 'null' }, object({
+    id: string, episodeId: string, label: { type: 'string', maxLength: 1000 }, lang: { type: 'string', maxLength: 32 },
+    format: { type: 'string', enum: ['ass', 'vtt'] }, source: { type: 'string', enum: ['embedded', 'local', 'extension', 'upload', 'online', 'translation'] },
+  }, ['id', 'episodeId', 'label', 'format'])] } }, ['choice']) } }, async (req, reply) => reply.header('Cache-Control', 'private, no-store').send(subtitleLibrary.remember(params(req).id, profile(req), (req.body as { choice: import('@moa/shared').SubtitlePreference | null }).choice)));
   app.get('/api/admin/subtitles', async (_req, reply) => reply.header('Cache-Control', 'private, no-store').send(subtitleLibrary.list()));
   const savedSubtitleParams = object({ kind: { type: 'string', enum: ['upload', 'translation', 'online'] }, id: string }, ['kind', 'id']);
   app.get('/api/admin/subtitles/:kind/:id/content', { schema: { params: savedSubtitleParams } }, async (req, reply) => {
@@ -425,8 +438,8 @@ export async function buildApp(overrides: Partial<Config> = {}, logger = true, s
     const result = sources.remoteEpisode(body.episodeId)
       ? await remotePlayback.create(profile(req), body.episodeId, body.startPosition, body.streamId)
       : await playback.create(profile(req), body.episodeId, body.capabilities, body.audioTrackId, body.startPosition);
-    result.subtitles.push(...translations.tracks(body.episodeId, profile(req)));
-    result.subtitles.push(...subtitleLibrary.uploads(body.episodeId, profile(req)));
+    const saved = subtitleLibrary.tracks(body.episodeId, profile(req));
+    result.subtitles.push(...saved.filter(track => !result.subtitles.some(existing => existing.id === track.id)));
     return result;
   });
   app.post('/api/playback/:sessionId/heartbeat', { schema: { params: idParams('sessionId') } }, async (req, reply) => {

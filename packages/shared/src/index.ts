@@ -233,6 +233,8 @@ export interface SubtitleTrack {
   provenance?: { creatorName: string; sourceUrl: string };
 }
 
+export type SubtitlePreference = Pick<SubtitleTrack, 'id' | 'source' | 'label' | 'lang' | 'format'> & { episodeId: string };
+
 export interface SavedSubtitle {
   id: string;
   source: 'upload' | 'translation' | 'online';
@@ -425,7 +427,9 @@ export interface BrowseSelection { revision: string; filters: FilterChange[] }
 export interface TitleGroup { id: string; manual: boolean; members: MediaCard[] }
 
 /* ---------- Accounts (auth service: /__moa/api) ---------- */
-export interface Account { id: string; username: string; role: 'admin' | 'member' }
+export const ACCOUNT_PERMISSIONS = ['video.watch', 'subtitles.add', 'subtitles.translate'] as const;
+export type AccountPermission = typeof ACCOUNT_PERMISSIONS[number];
+export interface Account { id: string; username: string; role: 'admin' | 'member'; permissions: AccountPermission[] }
 export interface Invite {
   id: string; code: string; url: string; label: string; maxUses: number | null; uses: number;
   expiresAt: string | null; revoked: boolean; createdAt: string;

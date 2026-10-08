@@ -139,6 +139,24 @@ test('VTT positive/negative offsets are absolute, survive switches, and apply af
   assert.equal(tracks.length, 0);
 });
 
+test('ASS shadow and outline controls preserve unrelated overrides and restore authored effects', async () => {
+  const style = { FontSize: 32, BorderStyle: 1, Outline: 2, Shadow: 1, OutlineColour: 0xff, BackColour: 0xff };
+  const event = { Text: '{\\pos(60,40)\\bord0\\shad0\\3c&HFFFFFF&\\4a&HFF&}Text' };
+  const { controller, styleWrites, eventWrites } = await harness({ styles: [style], events: [event] });
+  await controller.show(ass);
+  await controller.setAppearance({ size: 'medium', background: 'original', shadow: 'strong' });
+  assert.equal(styleWrites.at(-1).style.Shadow, 4);
+  assert.equal(styleWrites.at(-1).style.Outline, 2);
+  assert.equal(eventWrites.at(-1).event.Text, '{\\pos(60,40)\\bord0\\3c&HFFFFFF&}Text');
+  await controller.setAppearance({ size: 'medium', background: 'original', shadow: 'none', outline: 'thick' });
+  assert.equal(styleWrites.at(-1).style.Shadow, 0);
+  assert.equal(styleWrites.at(-1).style.Outline, 3);
+  assert.equal(eventWrites.at(-1).event.Text, '{\\pos(60,40)}Text');
+  await controller.setAppearance({ size: 'medium', background: 'original' });
+  assert.equal(JSON.stringify(styleWrites.at(-1).style), JSON.stringify(style));
+  assert.equal(eventWrites.at(-1).event.Text, event.Text);
+});
+
 for (const action of ['clear', 'destroy', 'off', 'vtt']) {
   test(`pending ASS import cannot reattach after ${action}`, async () => {
     const importGate = deferred();

@@ -3,10 +3,14 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useMatch, useNavigate } from 'react-router-dom';
 import type { WebsitePlugin, WebsitePluginPackage } from '@moa/shared';
+import { useMe } from '../api/queries';
 import { api, ApiError, currentProfileId } from '../lib/api';
 import { Button, ButtonLink, ConfirmDialog, IconButton } from './ui';
 
-const usePlugins = () => useQuery({ queryKey: ['website-plugins'], queryFn: () => api<WebsitePlugin[]>('/plugins'), retry: false, refetchInterval: 30000 });
+const usePlugins = () => {
+  const me = useMe().data;
+  return useQuery({ queryKey: ['website-plugins', me?.id, me?.role], queryFn: () => api<WebsitePlugin[]>('/plugins'), enabled: me?.role === 'admin', retry: false, refetchInterval: 30000 });
+};
 const path = (id: string) => `/plugins/${encodeURIComponent(id)}`;
 const permissionLabels = { 'app.context': '현재 페이지 읽기·변경 감지', 'app.navigate': 'MOA 내 페이지 이동', ui: '플러그인 도구 화면 표시', 'player.context': '현재 작품·회차·재생 위치 읽기', 'player.control': '재생·일시정지·탐색', 'subtitles.import': '자막 가져오기·서버 저장', storage: '프로필별 데이터 저장', notifications: '알림 표시' };
 type Player = { episodeId: string; title: string; getTime: () => number; onImport: (files: File[]) => Promise<boolean>; control: (action: string, seconds?: number) => Promise<void> };
@@ -203,6 +207,7 @@ export function WebsitePlugins({ admin }: { admin: boolean }) {
   const [draft, setDraft] = useState<WebsitePluginPackage | null>(null), [opened, setOpened] = useState<WebsitePlugin | null>(null);
   const [deleting, setDeleting] = useState<WebsitePlugin | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [dragging, setDragging] = useState(false);
   const run = async (operation: () => Promise<unknown>) => {
     setBusy(true); setError('');
     try { await operation(); await client.invalidateQueries({ queryKey: ['website-plugins'] }); }
@@ -210,7 +215,7 @@ export function WebsitePlugins({ admin }: { admin: boolean }) {
     finally { setBusy(false); }
   };
   const choose = async (files: File[]) => {
-    if (!files.length) return;
+    if (!files.length || busy) return;
     setBusy(true); setError(''); setDraft(null);
     try {
       if (files.length > 256 || files.reduce((sum, file) => sum + file.size, 0) > 4 * 1024 * 1024) throw new Error('플러그인 패키지는 4MB, 256개 파일 이하여야 해요.');
@@ -225,7 +230,11 @@ export function WebsitePlugins({ admin }: { admin: boolean }) {
   };
   const shown = plugins.data?.filter(plugin => admin || plugin.placements.some(place => place === 'app' || place === 'settings' || place === 'home')) ?? [];
   return <section className="settings-group" id="plugins"><h2>웹사이트 플러그인</h2><div className="settings-card">
-    {admin && <div className="setting plugin-row"><div><b>플러그인 설치</b><small>ZIP 파일이나 플러그인 폴더 전체를 선택하고 요청 권한을 확인해 주세요.</small></div><div className="plugin-actions"><Button icon={<Upload size={16} />} disabled={busy} onClick={() => input.current?.click()}>ZIP 파일 선택</Button><Button disabled={busy} onClick={() => folder.current?.click()}>폴더 선택</Button></div><input ref={input} type="file" accept=".zip,.moa-plugin.json" hidden aria-label="플러그인 파일" onChange={event => { void choose(Array.from(event.target.files || [])); event.target.value = ''; }} /><input ref={folder} type="file" {...{ webkitdirectory: '' }} multiple hidden aria-label="플러그인 폴더" onChange={event => { void choose(Array.from(event.target.files || [])); event.target.value = ''; }} /></div>}
+    {admin && <div className={`setting plugin-row plugin-dropzone${dragging ? ' is-dragging' : ''}`} aria-busy={busy}
+      onDragOver={event => { if (!event.dataTransfer.types.includes('Files')) return; event.preventDefault(); event.dataTransfer.dropEffect = busy ? 'none' : 'copy'; if (!busy) setDragging(true); }}
+      onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
+      onDrop={event => { event.preventDefault(); setDragging(false); void choose(Array.from(event.dataTransfer.files)); }}>
+      <div><b>플러그인 설치</b><small>{dragging ? '여기에 놓아 설치 정보를 확인하세요.' : 'ZIP 파일을 여기에 놓거나 파일·폴더를 선택해 주세요.'}</small></div><div className="plugin-actions"><Button icon={<Upload size={16} />} disabled={busy} onClick={() => input.current?.click()}>ZIP 파일 선택</Button><Button disabled={busy} onClick={() => folder.current?.click()}>폴더 선택</Button></div><input ref={input} type="file" accept=".zip,.moa-plugin.json" hidden aria-label="플러그인 파일" onChange={event => { void choose(Array.from(event.target.files || [])); event.target.value = ''; }} /><input ref={folder} type="file" {...{ webkitdirectory: '' }} multiple hidden aria-label="플러그인 폴더" onChange={event => { void choose(Array.from(event.target.files || [])); event.target.value = ''; }} /></div>}
     {draft && <div className="plugin-preview"><b>{draft.name} · {draft.version}</b><p>{draft.description}</p>{draft.script !== undefined && <p>이 JavaScript 플러그인은 지정된 페이지에서 자동 실행됩니다.</p>}<p>권한: {draft.permissions.map(p => permissionLabels[p]).join(', ') || '없음'}</p><p>외부 연결: {draft.connect.join(', ') || '없음'}</p><div className="plugin-actions"><Button disabled={busy} variant="primary" onClick={() => void run(async () => { await api('/admin/plugins', { method: 'POST', body: { ...draft } }); setDraft(null); })}>설치·업데이트</Button><Button disabled={busy} onClick={() => { setDraft(null); setError(''); }}>취소</Button></div></div>}
     {shown.map(plugin => <div className="setting plugin-row" key={plugin.id}><div><b>{plugin.name} <small>{plugin.version}</small></b><small>{plugin.description}</small></div><div className="plugin-actions">
       {plugin.enabled && plugin.placements.includes('home') && <ButtonLink to="/">홈에서 보기</ButtonLink>}

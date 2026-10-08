@@ -107,7 +107,7 @@ export function registerWebsitePlugins(app: FastifyInstance, db: Store) {
   };
   const pending = new Set<string>(), abort = new AbortController();
   app.addHook('onClose', async () => abort.abort());
-  app.get('/api/plugins', async req => db.all(`SELECT * FROM website_plugins ${req.moaAccount.role === 'admin' ? '' : 'WHERE enabled=1'} ORDER BY id`).map(metadata));
+  app.get('/api/plugins', async () => db.all('SELECT * FROM website_plugins ORDER BY id').map(metadata));
   app.get('/api/plugins/:id', async req => { const row = get((req.params as { id: string }).id); return { ...JSON.parse(row.package), revision: hash(row.package) }; });
   app.post('/api/admin/plugins/preview', { bodyLimit: 6 * 1024 * 1024 }, async req => unpackPlugin(req.body));
   app.post('/api/admin/plugins', { bodyLimit: 256 * 1024 }, async req => {

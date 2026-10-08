@@ -46,7 +46,7 @@ try {
     const server = { me: admin(), gets: 0, applies: 0, patches: [], onCheck: { state: 'available', latest: 'b'.repeat(40), behind: 1 },
       status: { configured: true, connected: true, state: 'current', mode: 'docker', current: 'a'.repeat(40), latest: 'a'.repeat(40), branch: 'main', behind: 0, ahead: 0, checkedAt: Date.now(), error: null } };
     const { context, page } = await open(width, server);
-    await page.goto(`${base}settings`);
+    await page.goto(`${base}settings#updates`);
     const section = page.locator('#updates');
     await section.getByText('최신 상태', { exact: true }).waitFor();
     assert.equal(await section.getByRole('combobox', { name: '업데이트 채널' }).count(), 0);
@@ -192,7 +192,7 @@ try {
     await page.waitForTimeout(800);
     assert.equal(await notice.count(), 0);
 
-    await page.goto(`${base}settings`);
+    await page.goto(`${base}settings#updates`);
     const toggle = page.locator('#updates').getByRole('switch', { name: '업데이트 알림' });
     assert.equal(await toggle.getAttribute('aria-checked'), 'false');
     await toggle.click();

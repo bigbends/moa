@@ -1,5 +1,5 @@
 import { useTitleGrouping } from "../lib/device-prefs";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Account, HomeResponse, LibraryFolder, MediaCard, MediaDetail, MediaType, Page, Profile, ScanStatus, SearchGroup, Settings, HistoryEntry } from "@moa/shared";
 import { api } from "../lib/api";
 
@@ -30,9 +30,9 @@ export const useHome = (type?: MediaType, providers?: string[], continueScope: "
 export const useMedia = (id: string) =>
   useQuery({ queryKey: keys.media(id), queryFn: ({ signal }) => api<MediaDetail>(`/media/${encodeURIComponent(id)}`, { signal }), enabled: id !== "" });
 
-export const useMediaList = (params: { type?: MediaType; provider?: string; genre?: string; sort?: string; page?: number }) => {
+export const useMediaList = (params: { type?: MediaType; provider?: string; genre?: string; sort?: string }) => {
   const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]));
-  return useQuery({ queryKey: keys.list(params), queryFn: ({ signal }) => api<Page<MediaCard>>(`/media?${query}`, { signal }) });
+  return useInfiniteQuery({ queryKey: keys.list(params), initialPageParam: 1, queryFn: ({ pageParam, signal }) => api<Page<MediaCard>>(`/media?${query}&page=${pageParam}`, { signal }), getNextPageParam: last => last.hasNextPage ? last.page + 1 : undefined, retry: false });
 };
 
 export const useGenres = (type?: MediaType) =>

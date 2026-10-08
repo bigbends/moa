@@ -4,7 +4,7 @@ import { CastButton } from '../player/CastButton';
 import type { CastMedia } from '../player/cast';
 import { checkSubtitleAlignment } from '../player/subtitle-sync';
 import { preparePlayback, retirePlayback } from '../player/session-lifecycle';
-import { subtitlesOffForTitle, rememberSubtitlesOff, subtitleOffsetForTitle, rememberSubtitleOffset, subtitlePreference, rememberSubtitle, restoreSubtitle } from "../player/subtitle-preference";
+import { subtitlesOffForTitle, rememberSubtitlesOff, subtitleOffsetForTitle, rememberSubtitleOffset, subtitlePreference, rememberSubtitle, loadSubtitlePreference, restoreSubtitle } from "../player/subtitle-preference";
 import { enterFullscreen } from "../lib/playback-fullscreen";
 import { documentPipSupported, useDocumentPip } from "../player/document-pip";
 import { devicePrefs, setDevicePref } from "../lib/device-prefs";
@@ -65,7 +65,7 @@ function useSession(episodeId: string, startOverride: number | null) {
       created = result;
       if (cancelled) await retirePlayback(result.sessionId, result.runtimeDependent);
       else setSession(result);
-    }).catch(e => { if (!cancelled) setError(e instanceof ApiError && e.code === "kids-restricted" ? KIDS_RESTRICTED : e instanceof ApiError && e.code === "apk_playback_capacity" ? "다른 기기에서 재생 중입니다. 재생이 끝난 뒤 다시 시도해 주세요." : "재생을 준비하지 못했습니다."); });
+    }).catch(e => { if (!cancelled) setError(e instanceof ApiError && e.code === "permission-denied" ? "영상 보기 권한이 없어요. 관리자에게 문의해 주세요." : e instanceof ApiError && e.code === "kids-restricted" ? KIDS_RESTRICTED : e instanceof ApiError && e.code === "apk_playback_capacity" ? "다른 기기에서 재생 중입니다. 재생이 끝난 뒤 다시 시도해 주세요." : "재생을 준비하지 못했습니다."); });
     return () => {
       cancelled = true;
       if (created) void retirePlayback(created.sessionId, created.runtimeDependent);
@@ -110,6 +110,10 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
   const navigate = useNavigate();
   const client = useQueryClient();
   const settings = useSettings().data;
+  const account = useMe().data;
+  const admin = account?.role === "admin";
+  const canAddSubtitles = admin || Boolean(account?.permissions?.includes('subtitles.add'));
+  const canTranslate = admin || Boolean(account?.permissions?.includes('subtitles.translate'));
   const carried = useLocation().state as { subtitle?: SubtitleTrack; offset?: number } | null;
   const t = params.get("t");
   const { retry, session, error: sessionError, switchAudio, audioTrackId, switchStream, compatible, switchCompatibility } = useSession(episodeId, t === null ? null : Number(t));
@@ -167,16 +171,18 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
   useEffect(() => { subs.current?.setHeight(subHeight); },[subHeight,subtitle,session]);
   const [appearance, setAppearance] = useState<SubtitleAppearance | null>(() => {
     try { const value = JSON.parse(localStorage.getItem('moa.subtitleAppearance') || 'null');
-      return value && ['small','medium','large','xlarge'].includes(value.size) && ['original','none','soft','solid'].includes(value.background) ? value : null;
+      return value && ['small','medium','large','xlarge'].includes(value.size) && ['original','none','soft','solid'].includes(value.background) ? { ...value, shadow: ['original','none','soft','strong'].includes(value.shadow) ? value.shadow : 'original', outline: ['original','none','thin','thick'].includes(value.outline) ? value.outline : 'original' } : null;
     } catch { return null; }
   });
   const subSize = appearance?.size ?? settings?.subtitleSize ?? 'medium';
   const subBackground = appearance?.background ?? 'original';
+  const subShadow = appearance?.shadow ?? 'original';
+  const subOutline = appearance?.outline ?? 'original';
   const changeAppearance = (patch: Partial<SubtitleAppearance>) => {
-    const value = { size: subSize, background: subBackground, ...patch };
+    const value = { size: subSize, background: subBackground, shadow: subShadow, outline: subOutline, ...patch };
     setAppearance(value); try { localStorage.setItem('moa.subtitleAppearance', JSON.stringify(value)); } catch {}
   };
-  useEffect(() => { void subs.current?.setAppearance({size:subSize,background:airplayMedia ? 'original' : subBackground}).catch(() => {}); }, [subSize,subBackground,subtitle,session,airplayMedia]);
+  useEffect(() => { void subs.current?.setAppearance({size:subSize,background:airplayMedia ? 'original' : subBackground,shadow:airplayMedia ? 'original' : subShadow,outline:airplayMedia ? 'original' : subOutline}).catch(() => {}); }, [subSize,subBackground,subShadow,subOutline,subtitle,session,airplayMedia]);
   const [extraSubs, setExtraSubs] = useState<SubtitleTrack[]>(carried?.subtitle ? [carried.subtitle] : []);
   const [importing, setImporting] = useState(false);
   const [draggingSubtitle, setDraggingSubtitle] = useState(false);
@@ -188,7 +194,8 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
   const onlineAbort = useRef<AbortController | null>(null);
   const applyAbort = useRef<AbortController | null>(null);
   const subtitleChoice = useRef(carried?.subtitle ? 1 : 0);
-  const initializedSubtitles = useRef<PlaybackSession | null>(null);
+  const [subtitlesReady, setSubtitlesReady] = useState<string | null>(null);
+  const saveSubtitle = (...args: Parameters<typeof rememberSubtitle>) => { void rememberSubtitle(...args).catch(() => setNotice("자막 선택을 서버에 저장하지 못했어요. 다시 선택해 주세요.")); };
 
   useEffect(()=>{if(sourcePicker) video.current?.pause();},[sourcePicker]);
   const live = session?.live || false;
@@ -243,7 +250,7 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
     }).catch(() => { if(!disposed) onFailure("이 영상을 재생하지 못했습니다."); });
     subs.current = new SubtitleController(v, session.fonts);
     subs.current.setHeight(subHeight);
-    void subs.current.setAppearance({size:subSize,background:subBackground}).catch(()=>{});
+    void subs.current.setAppearance({size:subSize,background:subBackground,shadow:subShadow,outline:subOutline}).catch(()=>{});
     return () => {
       disposed = true;
       failPlayback.current = ()=>{};
@@ -284,32 +291,34 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
   }, [session]);
 
   useEffect(() => {
-    if (!session || !settings || initializedSubtitles.current === session) return;
-    initializedSubtitles.current = session;
-    const remembered = subtitlePreference(episodeId);
-    if (remembered !== undefined) {
-      subtitleChoice.current ||= 1;
-      if (remembered === null) { setSubtitle(null); return; }
-      const controller = new AbortController(), choice = subtitleChoice.current;
-      void restoreSubtitle(episodeId, session.subtitles, remembered, controller.signal).then(track => {
-        if (controller.signal.aborted || choice !== subtitleChoice.current) return;
+    if (!session || !settings) return;
+    const controller = new AbortController(), choice = subtitleChoice.current;
+    void loadSubtitlePreference(episodeId, controller.signal).then(async remembered => {
+      if (controller.signal.aborted || subtitleChoice.current !== choice) return;
+      rememberSubtitlesOff(session.mediaId, remembered === null);
+      if (remembered !== undefined) {
+        subtitleChoice.current ||= 1;
+        if (remembered === null) { setSubtitle(null); return; }
+        const restoredChoice = subtitleChoice.current;
+        const track = await restoreSubtitle(episodeId, session.subtitles, remembered, controller.signal);
+        if (controller.signal.aborted || subtitleChoice.current !== restoredChoice) return;
         if (track) setExtraSubs(list => [...list.filter(item => item.id !== track.id), track]);
         setSubtitle(track);
         setNotice(track ? null : "이전에 사용한 자막이 없어졌어요. 다른 자막을 선택해 주세요.");
-      }).catch(() => { if (!controller.signal.aborted && choice === subtitleChoice.current) setNotice("이전에 사용한 자막을 불러오지 못했어요. 다시 선택해 주세요."); });
-      return () => { controller.abort(); if (initializedSubtitles.current === session) initializedSubtitles.current = null; };
-    }
-    if (subtitleChoice.current || isTranslationTrack(subtitle) || subtitle?.source === 'upload') {
-      // A new playback session revokes embedded subtitle URLs from the old one.
-      setSubtitle(current => current ? session.subtitles.find(track => track.id === current.id) ?? (current.provenance || isTranslationTrack(current) || current.source === 'upload' ? current : null) : null);
-      return;
-    }
-    const preferred = settings.defaultSubtitleLang;
-    // Saved AI translations are listed but only shown when the viewer picks them.
-    const own = session.subtitles.filter(track => !isTranslationTrack(track));
-    setSubtitle(subtitlesOffForTitle(session.mediaId) || preferred === "off" ? null
-      : own.find(track => track.lang === preferred) ?? own.find(track => track.default) ?? own[0] ?? null);
-  }, [session, settings]);
+        return;
+      }
+      if (subtitleChoice.current || isTranslationTrack(subtitle) || subtitle?.source === 'upload') {
+        setSubtitle(current => current ? session.subtitles.find(track => track.id === current.id) ?? (current.provenance || isTranslationTrack(current) || current.source === 'upload' ? current : null) : null);
+        return;
+      }
+      const preferred = settings.defaultSubtitleLang;
+      const own = session.subtitles.filter(track => !isTranslationTrack(track));
+      setSubtitle(preferred === "off" ? null
+        : own.find(track => track.lang === preferred) ?? own.find(track => track.default) ?? own[0] ?? null);
+    }).catch(() => { if (!controller.signal.aborted) setNotice("이전에 사용한 자막을 불러오지 못했어요. 다시 선택해 주세요."); })
+      .finally(() => { if (!controller.signal.aborted) setSubtitlesReady(session.sessionId); });
+    return () => controller.abort();
+  }, [session, Boolean(settings)]);
 
   useLayoutEffect(() => { manualSyncChoice.current = false; }, [session?.episodeId]);
 
@@ -396,7 +405,7 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
       }
       setExtraSubs(list => [...list.filter(item => item.id !== track.id), track]);
       setSubtitle(track);
-      rememberSubtitle(session.episodeId, track);
+      saveSubtitle(session.episodeId, track);
       if (!quiet) rememberSubtitlesOff(session.mediaId, false);
       const who = track.provenance?.creatorName ?? result.candidates.find(item => item.id === candidateId)?.creatorName;
       setNotice(quiet ? `${who ? `${who} 님의 ` : ""}한국어 자막을 찾아 적용했어요` : null);
@@ -416,11 +425,11 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
   // Translation modes wait for the online Korean search to finish (found and applied, or not).
   const [onlineSettled, setOnlineSettled] = useState<string | null>(null);
   useEffect(() => {
-    if (!session || !settings) return;
+    if (!session || !settings || subtitlesReady !== session.sessionId) return;
     const settle = () => setOnlineSettled(session.sessionId);
-    if (session.mediaType !== "anime" || !settings.autoFetchSubtitles || settings.defaultSubtitleLang === "off") return settle();
+    if (!canAddSubtitles || session.mediaType !== "anime" || !settings.autoFetchSubtitles || settings.defaultSubtitleLang === "off") return settle();
     if (subtitleChoice.current || subtitlesOffForTitle(session.mediaId)) return settle();
-    if (session.subtitles.some(isKorean) || (settings.skipSubtitleSearchWithSiteTrack !== false && hasUnlabelledSiteSubtitle(session.subtitles))) return settle();
+    if (session.subtitles.some(track => isKorean(track) || ['upload', 'online', 'translation'].includes(track.source ?? '')) || (settings.skipSubtitleSearchWithSiteTrack !== false && hasUnlabelledSiteSubtitle(session.subtitles))) return settle();
     let cancelled = false;
     const choice = subtitleChoice.current;
     void searchOnline().then(async result => {
@@ -428,19 +437,18 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
       if (!cancelled && result && result.autoApply !== false && best && best.confidence >= 0.5) await applyOnline(result, best.id, true, choice);
     }).finally(() => { if (!cancelled) settle(); });
     return () => { cancelled = true; onlineAbort.current?.abort(); };
-  }, [session, settings?.autoFetchSubtitles, settings?.defaultSubtitleLang, settings?.skipSubtitleSearchWithSiteTrack, searchOnline, applyOnline]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [session, subtitlesReady, canAddSubtitles, settings?.autoFetchSubtitles, settings?.defaultSubtitleLang, settings?.skipSubtitleSearchWithSiteTrack, searchOnline, applyOnline]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---------- AI translation ---------- */
   const translationConfig = useTranslationConfig().data;
-  const translationEnabled = Boolean(translationConfig?.configured && translationConfig.enabled);
-  const admin = useMe().data?.role === "admin";
+  const translationEnabled = canTranslate && Boolean(translationConfig?.configured && translationConfig.enabled);
   // Choice counter when a translation started; null for a job resumed from an earlier visit, -1 once the viewer moved on.
   const translationChoice = useRef<number | null>(null);
   // The live revision on screen (its translated cue times) and a newer one waiting for a quiet moment.
   const liveShown = useRef<{ id: string; ranges: TranslatedRange[] } | null>(null);
   const pendingRevision = useRef<{ track: SubtitleTrack; ranges: TranslatedRange[]; since: number } | null>(null);
   const showTranslated = (track: SubtitleTrack) => {
-    if (session) { rememberSubtitlesOff(session.mediaId, false); rememberSubtitle(session.episodeId, track); }
+    if (session) { rememberSubtitlesOff(session.mediaId, false); saveSubtitle(session.episodeId, track); }
     applyAbort.current?.abort();
     setSubtitle(track);
   };
@@ -482,6 +490,7 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
   const translation = useSubtitleTranslation(episodeId, onTranslationTrack);
   const jimaku = useJimakuSearch(episodeId);
   const startTranslation = (source: Parameters<typeof translation.start>[0], origin: "manual" | "auto" = "manual") => {
+    if (!canTranslate) return Promise.resolve();
     translationChoice.current = origin === "auto" ? subtitleChoice.current : ++subtitleChoice.current;
     const v = video.current;
     return translation.start(source, { origin, startAt: v && !live ? v.currentTime || session?.startPosition || 0 : 0 });
@@ -529,7 +538,7 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
     mode: translationMode,
     sourcePriority: settings?.translationSourcePriority ?? "site",
     enabled: translationEnabled,
-    ready: Boolean(session && !session.live && settings && translationConfig && savedLoaded && onlineSettled === session.sessionId),
+    ready: Boolean(session && subtitlesReady === session.sessionId && !session.live && settings && translationConfig && savedLoaded && onlineSettled === session.sessionId),
     // No separate track can mean burned-in subtitles; this guard also prevents a Jimaku offer/search.
     // Manual translation remains available through TranslationView.
     skip: !settings || settings.defaultSubtitleLang !== "ko" || Boolean(session && subtitlesOffForTitle(session.mediaId))
@@ -565,7 +574,7 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
   const translatingHere = showingLive && !live && untranslatedGap(liveJob!.translatedRanges, time, total);
 
   const chooseSubtitle = (track: SubtitleTrack | null) => {
-    if (session) { rememberSubtitlesOff(session.mediaId, !track); rememberSubtitle(session.episodeId, track); }
+    if (session) { rememberSubtitlesOff(session.mediaId, !track); saveSubtitle(session.episodeId, track); }
     subtitleChoice.current++;
     applyAbort.current?.abort();
     setOnline(state => ({ ...state, applying: undefined }));
@@ -579,7 +588,7 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
   };
 
   const addSubtitleFiles = async (files: File[], showMenu = true): Promise<boolean> => {
-    if (!files.length) return false;
+    if (!files.length || !canAddSubtitles) return false;
     const choice = ++subtitleChoice.current;
     uploadAbort.current?.abort();
     applyAbort.current?.abort();
@@ -748,6 +757,11 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
     return ()=>controller.abort();
   },[session,episodeId,markerDuration,live]);
   const markers = session?.markers ?? remoteMarkers;
+  const skipRanges = total > 0 ? [
+    { label: '오프닝', kind: 'intro', start: markers?.introStart ?? 0, end: markers?.introEnd },
+    { label: '엔딩', kind: 'credits', start: markers?.creditsStart, end: markers?.creditsEnd ?? total }
+  ].filter((range): range is { label: string; kind: string; start: number; end: number } => Number.isFinite(range.start) && Number.isFinite(range.end))
+    .map(range => ({ ...range, start: Math.max(0, Math.min(total, range.start)), end: Math.max(0, Math.min(total, range.end)) })).filter(range => range.end > range.start) : [];
   // Post-credits content (> 20s after the ending song) means the episode is
   // not over at the credits: offer "skip ending" and save next-up for the end.
   const postCredits = Boolean(markers?.creditsEnd && total && total - markers.creditsEnd > 20);
@@ -1045,7 +1059,7 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
       ref={root}
       className={cx("player", chrome ? "is-chrome" : "is-idle", playing && "is-playing", fill && "is-fill", `cue-${subSize}`, `cue-bg-${subBackground}`)}
       style={{ "--video-height": videoHeight ? `${videoHeight}px` : undefined, "--subtitle-lift": `${subHeight}%` } as React.CSSProperties}
-      onDragOver={event => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setDraggingSubtitle(true); } }}
+      onDragOver={event => { if (canAddSubtitles && event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setDraggingSubtitle(true); } }}
       onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingSubtitle(false); }}
       onDrop={event => { event.preventDefault(); setDraggingSubtitle(false); void addSubtitleFiles(Array.from(event.dataTransfer.files)); }}
       onPointerMove={event => { if (event.pointerType !== "touch") poke(); }}
@@ -1189,18 +1203,17 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
         </div>
       )}
 
-      {sourcePicker && <PlaybackSources episodeId={episodeId} position={live?0:video.current?.currentTime || time || session?.startPosition || 0} onClose={()=>setSourcePicker(false)} onPlay={(id,at,sameEpisode)=>{saveProgress(true); handingOff.current = sameEpisode && isTranslationTrack(subtitle) && translation.handoff(id); const carry = sameEpisode && (isTranslationTrack(subtitle) || subtitle?.source === 'upload'); const remembered = subtitlePreference(episodeId); if (carry) rememberSubtitle(id, subtitle, remembered?.episodeId ?? episodeId); else if (sameEpisode && remembered === null) rememberSubtitle(id, null); navigate(`/watch/${encodeURIComponent(id)}?t=${Math.max(0,Math.floor(at))}`, { state: carry ? { subtitle, offset: subOffset } : null });}}/>}
+      {sourcePicker && <PlaybackSources episodeId={episodeId} position={live?0:video.current?.currentTime || time || session?.startPosition || 0} onClose={()=>setSourcePicker(false)} onPlay={(id,at,sameEpisode)=>{saveProgress(true); handingOff.current = sameEpisode && isTranslationTrack(subtitle) && translation.handoff(id); const carry = sameEpisode && (isTranslationTrack(subtitle) || subtitle?.source === 'upload'); const remembered = subtitlePreference(episodeId); if (carry) saveSubtitle(id, subtitle, remembered?.episodeId ?? episodeId); else if (sameEpisode && remembered === null) saveSubtitle(id, null); navigate(`/watch/${encodeURIComponent(id)}?t=${Math.max(0,Math.floor(at))}`, { state: carry ? { subtitle, offset: subOffset } : null });}}/>}
       <footer className="player-bottom">
         {!live && <div className="seek" ref={bar} onPointerDown={onBarDown} onPointerMove={onBarMove} onPointerUp={onBarUp} onPointerLeave={() => setHover(null)}
           role="slider" aria-label="재생 위치" aria-valuemin={0} aria-valuemax={Math.round(total)} aria-valuenow={Math.round(shown)} aria-valuetext={clock(shown)} tabIndex={0}>
           <div className="seek-rail">
             <i className="seek-buffer" style={{ width: `${total ? (buffered / total) * 100 : 0}%` }} />
-            {intro?.introEnd ? <i className="seek-marker" style={{ left: `${(intro.introStart ?? 0) / total * 100}%`, width: `${(intro.introEnd - (intro.introStart ?? 0)) / total * 100}%` }} /> : null}
-            {markers?.creditsStart !== undefined && total ? <i className="seek-marker" style={{ left: `${markers.creditsStart / total * 100}%`, width: `${((markers.creditsEnd ?? total) - markers.creditsStart) / total * 100}%` }} /> : null}
             <i className="seek-fill" style={{ width: `${total ? (shown / total) * 100 : 0}%` }} />
+            {skipRanges.map(range => <i key={range.kind} className={`seek-marker seek-${range.kind}`} title={`${range.label} ${clock(range.start)}–${clock(range.end)}`} style={{ left: `${range.start / total * 100}%`, width: `${(range.end - range.start) / total * 100}%` }} />)}
           </div>
           <i className="seek-thumb" style={{ left: `${total ? (shown / total) * 100 : 0}%` }} />
-          {hover !== null && <span className="seek-tip" style={{ left: `${hover * 100}%` }}>{clock(hover * total)}</span>}
+          {hover !== null && <span className="seek-tip" style={{ left: `${hover * 100}%` }}>{skipRanges.find(range => hover * total >= range.start && hover * total < range.end)?.label} {clock(hover * total)}</span>}
         </div>}
 
         <div className="player-controls" data-remote-group>
@@ -1263,7 +1276,7 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
               )}
               <section className="panel-col">
                 <h3>자막</h3>
-                <button className="opt opt-action subtitle-upload" disabled={importing} onClick={() => subtitleInput.current?.click()}>{importing ? <Spinner size={18} /> : <FileUp size={18} />}<span>{importing ? '자막을 읽는 중…' : '자막 파일 선택'}<small>파일을 여기에 끌어 놓아도 돼요</small></span></button>
+                {canAddSubtitles && <button className="opt opt-action subtitle-upload" disabled={importing} onClick={() => subtitleInput.current?.click()}>{importing ? <Spinner size={18} /> : <FileUp size={18} />}<span>{importing ? '자막을 읽는 중…' : '자막 파일 선택'}<small>파일을 여기에 끌어 놓아도 돼요</small></span></button>}
                 <button className={cx("opt", !subtitle && "is-active")} onClick={() => chooseSubtitle(null)}><Check size={18} className="opt-check" /><span>끄기</span></button>
                 {allSubs.map(track => (
                   <button key={track.id} className={cx("opt", subtitle?.id === track.id && "is-active")} onClick={() => chooseSubtitle(track)}>
@@ -1274,8 +1287,8 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
                   </button>
                 ))}
                 {isTranslationTrack(subtitle) && <button className="opt opt-action" onClick={() => void exportSubtitle(subtitle!, titleLine.join(' · ')).catch(() => setNotice('번역 자막을 내보내지 못했어요. 다시 시도해 주세요.'))}><Download size={18} /><span>AI 번역 자막 내보내기</span></button>}
-                <TranslationEntry config={translationConfig} admin={admin} state={translation.state} tracks={allSubs} onOpen={() => { autopilot.hide(); setSubsView("translate"); }} />
-                <div className="online-subs">
+                {canTranslate && <TranslationEntry config={translationConfig} admin={admin} state={translation.state} tracks={allSubs} onOpen={() => { autopilot.hide(); setSubsView("translate"); }} />}
+                {canAddSubtitles && <div className="online-subs">
                   {online.status === "idle" && (
                     <button className="opt opt-action" onClick={() => void searchOnline()}><CloudDownload size={18} /><span>온라인에서 한국어 자막 찾기</span></button>
                   )}
@@ -1316,7 +1329,7 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
                       })}
                     </>
                   )}
-                </div>
+                </div>}
               </section>
             </div>
           )}
@@ -1340,6 +1353,14 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
                 <div className="seg" role="group" aria-label="자막 배경">{(["original", "none", "soft", "solid"] as const).map((background, i) => <button key={background} className={cx(subBackground === background && "is-active")} aria-pressed={subBackground === background} onClick={() => changeAppearance({ background })}>{["기본", "없음", "옅게", "진하게"][i]}</button>)}</div>
               </div>
               <div className="pf-row">
+                <span className="pf-label">그림자</span>
+                <div className="seg" role="group" aria-label="자막 그림자">{(["original", "none", "soft", "strong"] as const).map((shadow, i) => <button key={shadow} className={cx(subShadow === shadow && "is-active")} aria-pressed={subShadow === shadow} onClick={() => changeAppearance({ shadow })}>{["기본", "없음", "옅게", "진하게"][i]}</button>)}</div>
+              </div>
+              <div className="pf-row">
+                <span className="pf-label">테두리</span>
+                <div className="seg" role="group" aria-label="자막 테두리">{(["original", "none", "thin", "thick"] as const).map((outline, i) => <button key={outline} className={cx(subOutline === outline && "is-active")} aria-pressed={subOutline === outline} onClick={() => changeAppearance({ outline })}>{["기본", "없음", "얇게", "두껍게"][i]}</button>)}</div>
+              </div>
+              <div className="pf-row">
                 <span className="pf-label">위치</span>
                 <div className="pf-range">
                   <input type="range" min={0} max={30} step={1} value={subHeight} aria-label="자막 높이" onChange={e => changeSubHeight(Number(e.target.value))} style={{ "--fill": `${subHeight / 30 * 100}%` } as React.CSSProperties} />
@@ -1357,7 +1378,7 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
                   <button className="seg-btn" aria-label="+0.5" onClick={() => nudgeSubs(0.5)}>+0.5</button>
                 </div>
               </div>
-              <p className="panel-note">자막이 늦게 나오면 −, 빨리 나오면 +. {devicePrefs().rememberSubOffset ? "싱크는 이 작품의 다음 회차에도 이어져요. " : ""}크기·배경·위치는 이 기기에 저장돼요. 영상에 입혀진 자막은 바뀌지 않습니다.</p>
+              <p className="panel-note">자막이 늦게 나오면 −, 빨리 나오면 +. {devicePrefs().rememberSubOffset ? "싱크는 이 작품의 다음 회차에도 이어져요. " : ""}크기·배경·그림자·테두리·위치는 이 기기에 저장돼요. 영상에 입혀진 자막은 바뀌지 않습니다.</p>
             </div>
           )}
           {panel === "subs" && subsView === "translate" && (

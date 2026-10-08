@@ -6,7 +6,7 @@ import { useHome, useMe, useMediaList } from "../api/queries";
 import { Hero, HeroSkeleton } from "../components/Hero";
 import { Row, RowSkeleton } from "../components/Row";
 import { PosterCard } from "../components/Cards";
-import { Button, ButtonLink, EmptyState } from "../components/ui";
+import { Button, ButtonLink, EmptyState, ScrollLoader } from "../components/ui";
 import { TYPE_LABEL, cx } from "../lib/format";
 import { useNavigation, tabPath } from "../lib/navigation";
 import { HomePlugins } from '../components/WebsitePlugins';
@@ -49,12 +49,17 @@ export function HomePage({ localOnly = false }: { localOnly?: boolean }) {
 
 export function GenrePage({ type, genre }: { type?: MediaType; genre: string }) {
   const list = useMediaList({ type, genre, provider: "local" });
+  const items = [...new Map(list.data?.pages.flatMap(page => page.items).map(item => [item.id, item]) || []).values()];
   return (
     <div className="page-pad">
       <header className="page-head"><p className="page-kicker">{type ? TYPE_LABEL[type] : "로컬 라이브러리"}</p><h1>{genre}</h1></header>
+      {list.isPending && <RowSkeleton />}
       <div className="grid">
-        {list.data?.items.map(card => <PosterCard key={card.id} card={card} />)}
+        {items.map(card => <PosterCard key={card.id} card={card} />)}
       </div>
+      {list.isError && <EmptyState title="목록을 불러오지 못했습니다" action={<Button onClick={() => void (list.isFetchNextPageError ? list.fetchNextPage() : list.refetch())}>다시 시도</Button>} />}
+      {list.isSuccess && !items.length && <EmptyState title="표시할 작품이 없습니다" />}
+      <ScrollLoader hasMore={list.hasNextPage} loading={list.isFetching} failed={list.isError} onLoad={list.fetchNextPage} />
     </div>
   );
 }

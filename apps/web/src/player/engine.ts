@@ -81,7 +81,7 @@ async function hlsSupported() {
 
 type Jassub = Pick<import("jassub").default, "destroy" | "ready" | "timeOffset" | "renderer" | "resize" | "_demandRender" | "_lastDemandTime">;
 type AssStyle = Awaited<ReturnType<Jassub["renderer"]["getStyles"]>>[number];
-export type SubtitleAppearance = { size: "small" | "medium" | "large" | "xlarge"; background: "original" | "none" | "soft" | "solid" };
+export type SubtitleAppearance = { size: "small" | "medium" | "large" | "xlarge"; background: "original" | "none" | "soft" | "solid"; shadow?: "original" | "none" | "soft" | "strong"; outline?: "original" | "none" | "thin" | "thick" };
 
 /** Shows one subtitle track at a time: VTT via <track>, ASS via libass (JASSUB). */
 export class SubtitleController {
@@ -110,7 +110,7 @@ export class SubtitleController {
   private renderVtt = () => {
     const track = this.trackEl?.track, parent = this.video.parentElement;
     if (!track || !parent) return;
-    const native = this.appearance.background === "original" || document.pictureInPictureElement === this.video
+    const native = (this.appearance.background === "original" && (!this.appearance.shadow || this.appearance.shadow === "original") && (!this.appearance.outline || this.appearance.outline === "original")) || document.pictureInPictureElement === this.video
       || (this.video as HTMLVideoElement & { webkitDisplayingFullscreen?: boolean }).webkitDisplayingFullscreen;
     track.mode = native ? "showing" : "hidden";
     if (native) { this.overlay?.remove(); this.overlay = null; return; }
@@ -127,6 +127,8 @@ export class SubtitleController {
     const width = Math.min(box.right, rect.left + (rect.width + contentWidth) / 2) - left, height = Math.min(box.bottom, rect.top + (rect.height + contentHeight) / 2) - top;
     Object.assign(this.overlay.style, { left: `${left - box.left}px`, top: `${top - box.top}px`, width: `${width}px`, height: `${height}px` });
     this.overlay.dataset.background = this.appearance.background;
+    this.overlay.dataset.shadow = this.appearance.shadow ?? "original";
+    this.overlay.dataset.outline = this.appearance.outline ?? "original";
     this.overlay.replaceChildren();
     const step = (parseFloat(style.fontSize) || 18) * 1.35, occupied: DOMRect[] = [];
     for (const cue of Array.from(track.activeCues ?? []) as VTTCue[]) {
@@ -158,8 +160,9 @@ export class SubtitleController {
     const renderer = this.ass, token = this.token;
     this.styling = this.styling.catch(() => {}).then(async () => {
       if (!renderer || token !== this.token || !this.originalStyles.length) return;
-      const { size, background } = this.appearance;
-      const originalAppearance = size === "medium" && background === "original";
+      const { size, background, shadow = "original", outline = "original" } = this.appearance;
+      const originalEffects = background === "original" && shadow === "original" && outline === "original";
+      const originalAppearance = size === "medium" && originalEffects;
       if (originalAppearance && !this.styled) return;
       for (const [index, original] of this.originalStyles.entries()) {
         if (token !== this.token) return;
@@ -171,19 +174,24 @@ export class SubtitleController {
         } else if (background === "none") {
           style.BorderStyle = 1; style.Outline = 1.5; style.Shadow = 0; style.OutlineColour = 0;
         }
+        if (shadow !== "original") { style.Shadow = { none: 0, soft: 2, strong: 4 }[shadow]; style.BackColour = 0; }
+        if (outline !== "original") { style.Outline = { none: 0, thin: 1, thick: 3 }[outline]; style.OutlineColour = 0; }
         await renderer.renderer.setStyle(style, index);
       }
-      if (background !== "original" && !this.originalEvents) this.originalEvents = await renderer.renderer.getEvents();
+      if (!originalEffects && !this.originalEvents) this.originalEvents = await renderer.renderer.getEvents();
       for (const [index, event] of this.originalEvents?.entries() ?? []) {
         if (token !== this.token) return;
-        const Text = event.Text?.replace(/\{[^}]*\}/g, block => block
-          .replace(/\\(?:[xy]?(?:bord|shad)|[34][ca])[^\\})]*/gi, "")
-          .replace(/\\alpha(&H[0-9a-f]+&?)/gi, "\\1a$1\\2a$1"));
-        if (Text !== event.Text) await renderer.renderer.setEvent({ ...event, Text: background === "original" ? event.Text : Text } as Parameters<Jassub["renderer"]["setEvent"]>[0], index);
+        const Text = event.Text?.replace(/\{[^}]*\}/g, block => {
+          if (background !== "original") return block.replace(/\\(?:[xy]?(?:bord|shad)|[34][ca])[^\\})]*/gi, "").replace(/\\alpha(&H[0-9a-f]+&?)/gi, "\\1a$1\\2a$1");
+          if (shadow !== "original") block = block.replace(/\\(?:[xy]?shad|4[ca])[^\\})]*/gi, "");
+          if (outline !== "original") block = block.replace(/\\(?:[xy]?bord|3[ca])[^\\})]*/gi, "");
+          return block;
+        });
+        await renderer.renderer.setEvent({ ...event, Text } as Parameters<Jassub["renderer"]["setEvent"]>[0], index);
       }
       if (token !== this.token) return;
       this.styled = !originalAppearance;
-      if (background === "original") this.originalEvents = null;
+      if (originalEffects) this.originalEvents = null;
       if (token === this.token && renderer._lastDemandTime) await renderer._demandRender(true);
     });
     return this.styling;
