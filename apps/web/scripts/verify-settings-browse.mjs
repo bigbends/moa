@@ -41,19 +41,28 @@ try {
       if (path === '/api/admin/plugins') { installs.push(route.request().postDataJSON()); return route.fulfill({ json: plugin }); }
       if (path.endsWith('/translation/config')) return route.fulfill({ json: { enabled: false, configured: false, keys: [], requestIntervalMs: 1000, retryCount: 2 } });
       if (path === '/api/admin/default-navigation') return route.fulfill({ json: { navigation: null } });
-      if (path === '/api/admin/updates') return route.fulfill({ json: { configured: false, connected: false, state: 'idle' } });
+      if (path === '/api/admin/updates') return route.fulfill({ json: { configured: false, connected: false, state: 'idle', current: 'unknown' } });
+      if (path === '/api/admin/system') return route.fulfill({ json: { version: '0.1.0', revision: 'abcdef', os: 'Linux', kernel: '6.1', architecture: 'x64', nodeVersion: '22', deployment: 'Docker', cpuCount: 4, memoryUsed: 1024 ** 3, memoryTotal: 4 * 1024 ** 3, uptimeSeconds: 3600 } });
       return route.fulfill({ json: [] });
     });
     const base = server.resolvedUrls.local[0];
     await page.goto(`${base}settings`);
     const category = page.getByRole('combobox', { name: '설정 카테고리', exact: true });
-    await category.waitFor();
+    const menu = page.getByRole('navigation', { name: '설정 메뉴', exact: true });
+    await (width >= 900 ? menu : category).waitFor();
     assert.equal(await page.locator('.settings-panel > .settings-group').count(), 1);
     assert.equal(await page.getByRole('combobox', { name: 'defaultSubtitleLang', exact: true }).count(), 0);
-    await category.click();
-    assert.equal(await page.getByRole('listbox', { name: '설정 카테고리' }).evaluate(element => getComputedStyle(element).animationName), 'pop');
-    await category.press('ArrowDown');
-    await category.press('Enter');
+    if (width >= 900) {
+      assert.equal(await category.isVisible(), false);
+      await menu.getByRole('link', { name: '자막', exact: true }).click();
+      await menu.locator('[aria-current="page"]').filter({ hasText: '자막' }).waitFor();
+    } else {
+      assert.equal(await menu.isVisible(), false);
+      await category.click();
+      assert.equal(await page.getByRole('listbox', { name: '설정 카테고리' }).evaluate(element => getComputedStyle(element).animationName), 'pop');
+      await category.press('ArrowDown');
+      await category.press('Enter');
+    }
     await page.getByRole('combobox', { name: 'defaultSubtitleLang', exact: true }).waitFor();
     assert.ok(page.url().endsWith('#subtitles'));
     assert.equal(await page.getByRole('combobox', { name: 'preferredQuality', exact: true }).count(), 0);
@@ -62,7 +71,11 @@ try {
     await page.goto(`${base}settings/tabs?edit=home`);
     await page.getByRole('dialog').waitFor();
     await page.getByRole('button', { name: '닫기', exact: true }).click();
-    assert.equal(await category.textContent(), '홈 화면');
+    assert.equal(await (width >= 900 ? menu.locator('[aria-current="page"]') : category).textContent(), '홈 화면');
+    await page.goto(`${base}settings#updates`);
+    await page.getByRole('heading', { name: '시스템 정보', exact: true }).waitFor();
+    await page.locator('#updates').waitFor();
+    assert.equal(await (width >= 900 ? menu.locator('[aria-current="page"]') : category).textContent(), '정보');
     await page.goto(`${base}settings#subtitle-advanced`);
     await page.getByRole('region', { name: '자막 고급설정', exact: true }).waitFor();
     await page.emulateMedia({ reducedMotion: 'reduce' });

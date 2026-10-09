@@ -77,11 +77,10 @@ export function rememberSubtitlesOff(mediaId: string, off: boolean) {
   } catch { fallback.set(id, off); }
 }
 
-/** Subtitle timing offset (seconds) remembered per profile and title; release groups keep the same timing across episodes. */
-const offsetKey = (mediaId: string) => `moa.subtitleOffset:${JSON.stringify([currentProfileId(), mediaId])}`;
-export function subtitleOffsetForTitle(mediaId: string): number {
-  try { const value = Number(localStorage.getItem(offsetKey(mediaId))); return Number.isFinite(value) ? value : 0; } catch { return 0; }
+const offsetKey = (episodeId: string) => `moa.subtitleEpisodeOffset:${JSON.stringify([currentProfileId(), episodeId])}`;
+export function subtitleOffsetForEpisode(episodeId: string): number | undefined {
+  try { const saved = localStorage.getItem(offsetKey(episodeId)); if (saved === null) return undefined; const value = Number(saved); return Number.isFinite(value) ? Math.max(-600, Math.min(600, value)) : undefined; } catch { return undefined; }
 }
-export function rememberSubtitleOffset(mediaId: string, seconds: number) {
-  try { if (seconds) localStorage.setItem(offsetKey(mediaId), String(seconds)); else localStorage.removeItem(offsetKey(mediaId)); } catch { /* private mode */ }
+export function rememberSubtitleOffset(episodeId: string, seconds: number) {
+  try { localStorage.setItem(offsetKey(episodeId), String(seconds)); } catch {}
 }

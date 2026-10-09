@@ -202,21 +202,26 @@ export interface ClientCapabilities {
   maxHeight?: number;
 }
 
+export const PLUGIN_API_VERSION = 2;
 export interface WebsitePlugin {
-  apiVersion: 1;
+  apiVersion: number;
+  minMoaVersion?: string;
+  hooks?: Array<'catalog.transform'>;
+  compatibility?: { supported: boolean; apiVersion: number; moaVersion: string | null };
   revision: string;
   id: string;
   name: string;
   version: string;
   description: string;
-  placements: Array<'app' | 'settings' | 'player' | 'home'>;
-  permissions: Array<'app.context' | 'app.navigate' | 'ui' | 'player.context' | 'player.control' | 'subtitles.import' | 'storage' | 'notifications'>;
+  placements: Array<'app' | 'settings' | 'player' | 'home' | 'detail'>;
+  permissions: Array<'app.context' | 'app.navigate' | 'ui' | 'player.context' | 'player.control' | 'subtitles.import' | 'storage' | 'notifications' | 'catalog.modify'>;
   kind: 'html' | 'script';
   actions?: Array<{ id: string; label: string }>;
   connect: string[];
   enabled: boolean;
 }
-export interface WebsitePluginPackage extends Omit<WebsitePlugin, 'enabled' | 'revision' | 'kind'> { html?: string; script?: string }
+export interface WebsitePluginPackage extends Omit<WebsitePlugin, 'enabled' | 'revision' | 'kind' | 'compatibility'> { html?: string; script?: string }
+export type WebsitePluginRuntime = Pick<WebsitePlugin, 'id' | 'name' | 'revision' | 'kind' | 'placements' | 'permissions' | 'actions' | 'hooks' | 'enabled'>;
 
 export interface SubtitleTrack {
   id: string;
@@ -371,6 +376,12 @@ export interface Settings {
   autoplayDelay: number;
   defaultSubtitleLang: string;
   subtitleSize: "small" | "medium" | "large" | "xlarge";
+  subtitleScale?: number | null;
+  subtitleBackground?: "original" | "none" | "soft" | "solid";
+  subtitleShadow?: number | null;
+  subtitleOutline?: number | null;
+  subtitleHeight?: number;
+  subtitlePadding?: number;
   preferredQuality: "auto" | "1080" | "720" | "480";
   hardwareTranscoding: boolean;
   /** Search Korean subtitles online when an anime episode has none. */
@@ -457,6 +468,14 @@ export interface UpdatePolicy {
 export interface UpdateHistory {
   version: string; previous: string; at: number; outcome: 'complete' | 'rolled-back' | 'failed';
 }
+export interface ReleaseDiscovery {
+  repository: string; currentVersion: string | null; latestVersion: string | null; updateAvailable: boolean | null; checkedAt: number; error: string | null;
+  releases: Array<{ version: string; url: string; publishedAt: string }>;
+}
+export interface SystemInfo {
+  os: string; kernel: string; architecture: string; nodeVersion: string; version: string; revision: string;
+  deployment: string; cpuCount: number; memoryTotal: number; memoryUsed: number; uptimeSeconds: number;
+}
 export interface UpdateStatus {
   configured: boolean; connected: boolean;
   state: 'idle' | 'checking' | 'updating' | 'current' | 'available' | 'blocked' | 'failed' | 'restart-required'
@@ -465,7 +484,7 @@ export interface UpdateStatus {
   current: string; latest: string | null; branch: string | null;
   behind: number; ahead: number; checkedAt: number | null; error: string | null;
   policy?: UpdatePolicy; nextCheckAt?: number | null; notesUrl?: string | null;
-  updaterVersion?: string; history?: UpdateHistory[];
+  updaterVersion?: string; history?: UpdateHistory[]; discovery?: ReleaseDiscovery;
 }
 
 /* ---------- Gemini subtitle translation ---------- */

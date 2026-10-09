@@ -11,7 +11,7 @@ const server = await createServer({ root: fileURLToPath(new URL('..', import.met
 await server.listen();
 const browser = await chromium.launch({ executablePath: process.env.MOA_BROWSER_EXECUTABLE, args: ['--autoplay-policy=no-user-gesture-required'] });
 let session = 0, resolved = 0, reordered = false, resolveGate, preferenceGate;
-const lookups = [], errors = [], preferences = new Map();
+const lookups = [], errors = [], preferences = new Map(), profileSettings = new Map();
 const upload = () => ({ id: 'upload-stable', source: 'upload', label: '선택한 파일.srt', format: 'vtt', url: `/fixture/upload-${++resolved}.vtt` });
 const translated = () => ({ id: 'translation-stable', source: 'translation', label: '한국어 · AI 번역', lang: 'ko', format: 'vtt', url: `/fixture/translation-${++resolved}.vtt` });
 try {
@@ -35,9 +35,13 @@ try {
       if (request.method() === 'GET') await preferenceGate;
       return json(result);
     }
-    if (pathname === '/api/settings') return json({ defaultSubtitleLang: 'ja', subtitleSize: 'medium', autoFetchSubtitles: false, autoplayNext: false, translationMode: 'manual' });
+    if (pathname === '/api/settings') {
+      const profile = request.headers()['x-moa-profile'];
+      if (request.method() === 'PATCH') profileSettings.set(profile, { ...profileSettings.get(profile), ...request.postDataJSON() });
+      return json({ defaultSubtitleLang: 'ja', subtitleSize: 'medium', autoFetchSubtitles: false, autoplayNext: false, translationMode: 'manual', ...profileSettings.get(profile) });
+    }
     if (pathname === '/api/me') return json({ role: 'admin' });
-    if (pathname === '/api/plugins' || pathname === '/api/sources') return json([]);
+    if (pathname === '/api/plugin-runtime' || pathname === '/api/plugins' || pathname === '/api/sources') return json([]);
     if (pathname === '/api/translation/config') return json({ configured: false, enabled: false });
     if (pathname.endsWith('/subtitles/uploads') || pathname.endsWith('/subtitles/translations')) {
       lookups.push(pathname);
@@ -130,9 +134,47 @@ try {
   await other.mouse.move(100, 100);
   await other.getByRole('button', { name: '자막 및 음성', exact: true }).click();
   await other.getByRole('button', { name: /자막 설정/, exact: false }).click();
-  await other.getByRole('group', { name: '자막 그림자', exact: true }).getByRole('button', { name: '진하게', exact: true }).click();
-  await other.getByRole('group', { name: '자막 테두리', exact: true }).getByRole('button', { name: '두껍게', exact: true }).click();
-  await other.waitForFunction(() => document.querySelector('.subtitle-overlay')?.getAttribute('data-shadow') === 'strong' && document.querySelector('.subtitle-overlay')?.getAttribute('data-outline') === 'thick');
+  await other.getByRole('spinbutton', { name: '자막 그림자', exact: true }).fill('2.5');
+  await other.getByRole('spinbutton', { name: '자막 그림자', exact: true }).press('Tab');
+  await other.getByRole('spinbutton', { name: '자막 윤곽선', exact: true }).fill('1.2');
+  await other.getByRole('spinbutton', { name: '자막 윤곽선', exact: true }).press('Tab');
+  await other.getByRole('spinbutton', { name: '자막 크기', exact: true }).fill('');
+  await other.getByRole('spinbutton', { name: '자막 크기', exact: true }).pressSequentially('125');
+  await other.getByRole('spinbutton', { name: '자막 크기', exact: true }).press('Tab');
+  await other.getByRole('spinbutton', { name: '자막 높이', exact: true }).fill('12');
+  await other.getByRole('spinbutton', { name: '자막 높이', exact: true }).press('Tab');
+  await other.getByRole('spinbutton', { name: '자막 배경 여백', exact: true }).fill('8');
+  await other.getByRole('spinbutton', { name: '자막 배경 여백', exact: true }).press('Tab');
+  await other.waitForFunction(() => document.querySelector('.subtitle-overlay')?.getAttribute('data-shadow') === '2.5' && document.querySelector('.subtitle-overlay')?.getAttribute('data-outline') === '1.2');
+  await other.getByRole('button', { name: '+0.5', exact: true }).click();
+  await other.evaluate(async () => { const { setDevicePref } = await import('/src/lib/device-prefs.ts'); setDevicePref('seekStep', 30); });
+  await other.reload();
+  await other.waitForFunction(() => document.querySelector('track')?.src.includes('english'));
+  await other.mouse.move(100, 100);
+  await other.getByRole('button', { name: '자막 및 음성', exact: true }).click();
+  await other.getByRole('button', { name: /자막 설정/, exact: false }).click();
+  assert.match(await other.locator('.sync-value').innerText(), /0.5/);
+  await page.reload(); await ready(); await open();
+  await page.getByRole('button', { name: /자막 설정/, exact: false }).click();
+  assert.equal(await page.getByRole('spinbutton', { name: '자막 크기', exact: true }).inputValue(), '125');
+  assert.equal(await page.getByRole('spinbutton', { name: '자막 그림자', exact: true }).inputValue(), '2.5');
+  assert.equal(await page.getByRole('spinbutton', { name: '자막 윤곽선', exact: true }).inputValue(), '1.2');
+  assert.equal(await page.getByRole('spinbutton', { name: '자막 높이', exact: true }).inputValue(), '12');
+  assert.equal(await page.getByRole('spinbutton', { name: '자막 배경 여백', exact: true }).inputValue(), '8');
+  assert.match(await page.locator('.sync-value').innerText(), /0.0/);
+  assert.equal(await page.evaluate(async () => (await import('/src/lib/device-prefs.ts')).devicePrefs().seekStep), 10);
+  await other.goto(`${base}watch/e3`);
+  await other.waitForFunction(() => document.querySelector('video')?.readyState >= 2);
+  await other.mouse.move(100, 100);
+  await other.getByRole('button', { name: '자막 및 음성', exact: true }).click();
+  await other.getByRole('button', { name: /자막 설정/, exact: false }).click();
+  assert.match(await other.locator('.sync-value').innerText(), /0.0/);
+  assert.equal(await other.getByRole('spinbutton', { name: '자막 그림자', exact: true }).inputValue(), '2.5');
+  await other.goto(`${base}watch/e2`);
+  await other.waitForFunction(() => document.querySelector('video')?.readyState >= 2);
+  await other.mouse.move(100, 100);
+  await other.getByRole('button', { name: '자막 및 음성', exact: true }).click();
+  await other.getByRole('button', { name: /자막 설정/, exact: false }).click();
   await other.getByRole('button', { name: '자막 설정', exact: true }).click();
   const offSaved = other.waitForResponse(response => response.url().endsWith('/subtitles/preference') && response.request().method() === 'PUT');
   await other.getByRole('button', { name: '끄기', exact: true }).click();

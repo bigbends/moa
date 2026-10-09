@@ -103,8 +103,8 @@ test('ASS defaults preserve authored styles and background overrides restore inl
   assert.equal(styleWrites.length, 0);
   assert.equal(eventWrites.length, 0);
   await controller.setAppearance({ size: 'medium', background: 'soft' });
-  assert.equal(styleWrites.at(-1).style.BorderStyle, 3);
-  assert.equal(styleWrites.at(-1).style.OutlineColour, 0x80);
+  assert.equal(styleWrites.at(-1).style.BorderStyle, 4);
+  assert.equal(styleWrites.at(-1).style.BackColour, 0x80);
   assert.equal(styleWrites.at(-1).style.Alignment, 8);
   assert.equal(eventWrites.at(-1).event.Text, '{\\pos(60,40)\\1a&H80&\\2a&H80&}SIGN{\\rDefault} subtitle');
   await controller.setAppearance({ size: 'large', background: 'solid' });
@@ -155,6 +155,23 @@ test('ASS shadow and outline controls preserve unrelated overrides and restore a
   await controller.setAppearance({ size: 'medium', background: 'original' });
   assert.equal(JSON.stringify(styleWrites.at(-1).style), JSON.stringify(style));
   assert.equal(eventWrites.at(-1).event.Text, event.Text);
+});
+
+test('numeric subtitle appearance preserves zero overrides and restores authored styles', async () => {
+  const original = { FontSize: 32, BorderStyle: 1, Outline: 3, Shadow: 2, OutlineColour: 0xff, BackColour: 0xff };
+  const { controller, styleWrites } = await harness({ styles: [original] });
+  await controller.show(ass);
+  await controller.setAppearance({ size: 'medium', scale: 125, background: 'original', shadow: 2.5, outline: 1.2 });
+  assert.equal(styleWrites.at(-1).style.FontSize, 40);
+  assert.equal(styleWrites.at(-1).style.Shadow, 2.5);
+  assert.equal(styleWrites.at(-1).style.Outline, 1.2);
+  await controller.setAppearance({ size: 'medium', background: 'original', shadow: 0, outline: 0 });
+  assert.equal(styleWrites.at(-1).style.Shadow, 0);
+  assert.equal(styleWrites.at(-1).style.Outline, 0);
+  await controller.setAppearance({ size: 'medium', background: 'soft', padding: 8 });
+  assert.equal(styleWrites.at(-1).style.Shadow, 8);
+  await controller.setAppearance({ size: 'medium', background: 'original' });
+  assert.equal(JSON.stringify(styleWrites.at(-1).style), JSON.stringify(original));
 });
 
 for (const action of ['clear', 'destroy', 'off', 'vtt']) {

@@ -18,7 +18,7 @@ body.watch-pip { margin: 0; overflow: hidden; background: #000; }
 .player-video::cue { font-size: var(--subtitle-font-size, 16px); font-family: "Pretendard Variable", Pretendard, "Noto Sans CJK JP", sans-serif; font-weight: 600; background: rgba(0, 0, 0, .5); color: #fff; line-height: 1.35; }
 .subtitle-overlay { position: absolute; z-index: 2; overflow: hidden; pointer-events: none; font: 600 var(--subtitle-font-size, 16px)/1.35 "Pretendard Variable", Pretendard, "Noto Sans CJK JP", sans-serif; color: #fff; }
 .subtitle-cue { position: absolute; white-space: pre-wrap; overflow-wrap: break-word; unicode-bidi: plaintext; }
-.subtitle-cue > span { padding: 0 .12em; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.subtitle-cue > span { padding: .12em .3em; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .subtitle-overlay[data-background=none] .subtitle-cue > span { text-shadow: 0 1px 3px #000; }
 .subtitle-overlay[data-background=soft] .subtitle-cue > span, .subtitle-overlay[data-background=original] .subtitle-cue > span { background: rgba(0, 0, 0, .5); }
 .subtitle-overlay[data-background=solid] .subtitle-cue > span { background: #000; }
@@ -196,6 +196,16 @@ body.watch-pip { margin: 0; overflow: hidden; background: #000; }
   animation: fade .3s;
 }
 .player-end b, .player-error b { font-size: 1.4rem; }
+.player-end { grid-template-columns: min(100%, 800px); overflow-y: auto; }
+.player-end-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 16px; max-width: 800px; }
+.player-end > p { max-width: 520px; color: var(--text-3); }
+.player-recommendation { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 16px; align-items: center; width: min(100%, 420px); margin-top: 24px; padding: 12px; background: var(--surface-1); border-radius: var(--radius-m); text-align: left; }
+.player-recommendation > span { display: grid; gap: 6px; min-width: 0; }
+.player-recommendation strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.player-recommendation small { color: var(--text-3); }
+.player-recommendation > span > span { display: flex; align-items: center; gap: 6px; font-size: .85rem; }
+@media (max-width: 600px) { .player-end-actions { display: grid; width: min(100%, 320px); } }
+@media (max-height: 560px) { .player-end { align-content: start; } }
 .player-error p { color: var(--text-3); }
 
 /* Panels: one solid sheet, large touch rows, a single accent for "selected". */

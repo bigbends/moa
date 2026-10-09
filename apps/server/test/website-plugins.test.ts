@@ -5,14 +5,14 @@ import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { pluginPackage, unpackPlugin } from '../src/website-plugins.js';
+import { pluginCompatibility, pluginPackage, unpackPlugin } from '../src/website-plugins.js';
 import { buildApp } from '../src/app.js';
 
 const template = { ...JSON.parse(await readFile(new URL('../../../plugins/template/examples/subtitle-helper/manifest.json', import.meta.url), 'utf8')), html: '<p>Plugin test</p>' };
 
 test('plugin packages validate permissions, sizes, origins and API versions', () => {
   assert.deepEqual(pluginPackage(template), template);
-  for (const patch of [{ apiVersion: 2 }, { id: '../x' }, { permissions: ['admin'] }, { permissions: ['player.context', 'player.context'] }, { placements: [] }, { connect: ['http://example.org'] }, { connect: ['https://example.org/path'] }, { connect: ['https://user:pass@example.org'] }, { html: 'x'.repeat(200 * 1024 + 1) }, { future: true }]) {
+  for (const patch of [{ apiVersion: 0 }, { id: '../x' }, { permissions: ['admin'] }, { permissions: ['player.context', 'player.context'] }, { placements: [] }, { connect: ['http://example.org'] }, { connect: ['https://example.org/path'] }, { connect: ['https://user:pass@example.org'] }, { html: 'x'.repeat(200 * 1024 + 1) }, { future: true }]) {
     assert.throws(() => pluginPackage({ ...template, ...patch }));
   }
   assert.doesNotThrow(() => pluginPackage({ ...template, connect: ['https://example.org'] }));
@@ -24,6 +24,16 @@ test('plugin packages validate permissions, sizes, origins and API versions', ()
   assert.throws(() => pluginPackage({ ...script, placements: ['homepage'] }));
   for (const patch of [{ html: '<p>Mixed</p>' }, { script: '' }, { script: '가'.repeat(70 * 1024) }, { actions: [{ id: 'bad/id', label: 'Bad' }] }, { actions: [{ id: 'valid', label: '' }] }, { actions: [{ id: 'one', label: 'One' }, { id: 'one', label: 'Two' }] }, { actions: Array.from({ length: 9 }, (_, i) => ({ id: `action-${i}`, label: 'Action' })) }]) assert.throws(() => pluginPackage({ ...script, ...patch }));
   assert.throws(() => pluginPackage({ ...template, actions: script.actions }));
+  const hooked = { ...script, apiVersion: 2, placements: ['app', 'detail'], permissions: ['catalog.modify'], hooks: ['catalog.transform'], minMoaVersion: '1.2.0-beta.2' };
+  assert.deepEqual(pluginPackage(hooked), hooked);
+  for (const patch of [{ apiVersion: 1 }, { permissions: [] }, { hooks: ['server.exec'] }, { minMoaVersion: 'latest' }, { minMoaVersion: '1.2.0-01' }, { minMoaVersion: '01.2.0' }]) assert.throws(() => pluginPackage({ ...hooked, ...patch }));
+  for (const current of ['1.2.0-beta.2', '1.2.0-beta.10', 'v1.2.0', '1.2.0+build.5', '1.3.0', '9007199254740993.0.0']) assert.equal(pluginCompatibility(pluginPackage(hooked), current).supported, true);
+  for (const current of ['1.2.0-beta.1', '1.1.9', 'unknown', 'latest']) assert.equal(pluginCompatibility(pluginPackage(hooked), current).supported, false);
+  assert.equal(pluginCompatibility(pluginPackage({ ...hooked, minMoaVersion: '1.2.0' }), '1.2.0-beta.10').supported, false);
+  assert.equal(pluginCompatibility(pluginPackage({ ...template, apiVersion: 3 })).supported, false);
+  assert.equal(pluginCompatibility(pluginPackage({ ...hooked, minMoaVersion: '9007199254740993.0.0' }), '9007199254740992.0.0').supported, false);
+  assert.equal(pluginCompatibility(pluginPackage({ ...hooked, minMoaVersion: '1.2.0-9007199254740993' }), '1.2.0-9007199254740992').supported, false);
+  assert.equal(pluginCompatibility(pluginPackage({ ...hooked, minMoaVersion: '1.2.0+build.1' }), '1.2.0+build.2').supported, true);
 });
 
 test('whole plugin folders and ZIPs select their root manifest and reject unsafe or incomplete packages', async () => {
@@ -108,6 +118,8 @@ test('plugin installation persists, admin controls are protected and network acc
   const admin = { 'x-moa-account': 'owner', 'x-moa-role': 'admin' }, member = { 'x-moa-account': 'member', 'x-moa-role': 'member' };
   try {
     const p = (await env.app.inject({ method: 'POST', url: '/api/profiles', headers: admin, payload: { name: 'Admin' } })).json();
+    const memberProfile = (await env.app.inject({ method: 'POST', url: '/api/profiles', headers: member, payload: { name: 'Member' } })).json();
+    const runtimeHeaders = { ...member, 'x-moa-profile': memberProfile.id };
     const profile = { ...admin, 'x-moa-profile': p.id };
     assert.equal((await env.app.inject({ method: 'POST', url: '/api/admin/plugins', headers: member, payload: template })).statusCode, 403);
     const preview = { files: [{ name: 'package.moa-plugin.json', content: JSON.stringify(template) }] };
@@ -119,6 +131,12 @@ test('plugin installation persists, admin controls are protected and network acc
     assert.equal((await env.app.inject({ url: '/api/plugins', headers: member })).statusCode, 403);
     const listing = (await env.app.inject({ url: '/api/plugins', headers: profile })).json();
     assert.equal(listing.length, 1); assert.equal(listing[0].html, undefined);
+    const runtime = await env.app.inject({ url: '/api/plugin-runtime', headers: runtimeHeaders });
+    assert.equal(runtime.statusCode, 200, runtime.body);
+    assert.equal(runtime.json()[0].id, template.id);
+    for (const field of ['version', 'description', 'connect', 'minMoaVersion', 'compatibility', 'html']) assert.equal(runtime.json()[0][field], undefined);
+    assert.equal((await env.app.inject({ url: `/api/plugin-runtime/${template.id}`, headers: runtimeHeaders })).json().html, template.html);
+    assert.equal((await env.app.inject({ method: 'POST', url: `/api/plugin-runtime/${template.id}/storage`, headers: runtimeHeaders, payload: { revision: listing[0].revision, value: {} } })).statusCode, 403);
     const endpoint = `/api/plugins/${template.id}`;
     for (const url of ['/api/plugins', endpoint]) assert.equal((await env.app.inject({ url, headers: member })).statusCode, 403);
     for (const url of [endpoint + '/storage', endpoint + '/request']) assert.equal((await env.app.inject({ method: 'POST', url, headers: member, payload: {} })).statusCode, 403);
@@ -134,6 +152,7 @@ test('plugin installation persists, admin controls are protected and network acc
     await env.app.inject({ method: 'PATCH', url: `/api/admin/plugins/${template.id}`, headers: admin, payload: { enabled: false } });
     await env.app.inject({ method: 'POST', url: '/api/admin/plugins', headers: admin, payload: { ...template, version: '1.0.1' } });
     assert.equal((await env.app.inject({ url: endpoint, headers: profile })).statusCode, 404);
+    assert.deepEqual((await env.app.inject({ url: '/api/plugin-runtime', headers: runtimeHeaders })).json(), []);
     assert.equal((await env.app.inject({ url: '/api/plugins', headers: profile })).json()[0].enabled, false);
     await env.app.close();
     env = await buildApp({ dataDir: directory, mediaRoot: directory, requireAccount: true }, false);
@@ -141,6 +160,12 @@ test('plugin installation persists, admin controls are protected and network acc
     assert.equal(JSON.parse(saved.package).version, '1.0.1'); assert.equal(saved.enabled, 0);
     await env.app.inject({ method: 'PATCH', url: `/api/admin/plugins/${template.id}`, headers: admin, payload: { enabled: true } });
     assert.equal((await env.app.inject({ url: endpoint, headers: profile })).statusCode, 200);
+    await env.app.inject({ method: 'POST', url: '/api/admin/plugins', headers: admin, payload: { ...template, apiVersion: 3 } });
+    const future = (await env.app.inject({ url: '/api/plugins', headers: profile })).json()[0];
+    assert.equal(future.compatibility.supported, false);
+    assert.equal(future.compatibility.apiVersion, 2);
+    assert.deepEqual((await env.app.inject({ url: '/api/plugin-runtime', headers: runtimeHeaders })).json(), []);
+    assert.equal((await env.app.inject({ url: `/api/plugin-runtime/${template.id}`, headers: runtimeHeaders })).statusCode, 409);
     await env.app.inject({ method: 'DELETE', url: `/api/admin/plugins/${template.id}`, headers: admin });
     assert.equal((await env.app.inject({ url: endpoint, headers: profile })).statusCode, 404);
   } finally { await env.app.close(); await rm(directory, { recursive: true, force: true }); }
