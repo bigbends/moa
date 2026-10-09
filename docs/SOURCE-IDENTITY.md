@@ -1,25 +1,40 @@
-# Source identity across numbered domain changes
+# Stable source IDs and address aliases
 
-Mangayomi scripts continue returning ordinary `link` and chapter `url` fields. No source-specific ID option or new extension API is required.
+Mangayomi JS and Aniyomi APK keep their existing contracts: work `link` and episode `url` values are passed to the original extension. No new extension field or per-source setting is required.
 
-The host first looks for the original exact URL-derived ID. When it is absent, an indexed identity lookup can reuse an existing work ID within the same installed source, or an episode ID within the same work. Only an unambiguous match is reused. Existing progress, watchlists, subtitle associations and URLs embedded in client links keep their IDs.
+## IDs and aliases
 
-For a source's own hostname family, a numeric suffix before a domain separator is normalized (for example `example12.test` and `example13.test`). The path, query and fragment remain significant. Different hostname families, ports, source installations, query values and fragments are isolated. Opaque extension identifiers are retained exactly. Titles and episode numbers alone are never used to merge content.
+`media.id` and `episodes.id` remain permanent. Existing IDs, progress for every profile, watchlists, subtitles and client links are not rewritten. New items still receive the legacy hash-shaped ID after alias matching fails; a hash is an initial allocation, not an instruction to replace an existing ID when its URL changes.
 
-The additive identity mapping tables are backfilled at startup; old IDs and user data are not rewritten. Subsequent source responses update the network URL separately from the preserved ID. Ambiguous pre-existing duplicates are not deleted or automatically reconciled.
+The host stores old and new raw addresses as aliases. Exact alias matching comes first, then path/query/fragment matching within a known site namespace. Work lookup is scoped to one installed source; episode lookup is scoped to one work. Multiple matches are not merged. Titles, season numbers and episode labels alone are not identity evidence.
 
-This does not infer arbitrary domain or path changes, different TLDs, source-repository migrations or unrelated host aliases. It cannot make a script follow a new domain if the script itself has no address resolver. It also does not combine duplicate rows that already have conflicting histories.
+Absolute and relative forms can match within a known namespace, but the extension receives its original representation. JSON identifiers, bare IDs and non-HTTP schemes remain opaque. Queries, fragments and encoded values are not stripped or sorted. Unrelated hosts in an aggregator remain separate even when they use the same path.
 
-Upstream comparison: Mangayomi's models use independent database IDs. At commit `e479d28ac601594b6768ff343035ed6486babc17`, `lib/modules/manga/detail/providers/update_manga_detail_providers.dart` compares chapter URLs without their domains and updates matched chapter URLs while retaining their IDs; it additionally contains chapter-recognition fallbacks. MOA deliberately limits automatic matching to the source's own numbered-host family and does not copy title-based matching.
+## Where address relationships come from
 
-Validation: the source identity integration test reopens a pre-index database, changes the numbered host, and checks unchanged work/episode IDs, two profile positions and a watchlist, plus ambiguous and foreign-host cases. Existing source and APK tests remain applicable.
+- A successfully installed extension's base URL transition connects the old and new origin when the base path is unchanged. This supports numeric, TLD and hostname changes. Merely refreshing a repository index cannot change a running extension's address.
+- Explicit extension rollback selects the restored installed origin, regardless of numeric order. Old aliases remain usable.
+- Numbered siblings in the source's own namespace remain supported for extensions whose manifests have static base URLs. A fresh list/detail response can introduce a new candidate in either numeric direction. The largest observed number is not the current-address rule. An already retired origin returned by a stale response does not replace the active candidate. This numbered-host association is a compatibility heuristic, not universal proof that two sites have the same content.
+- A successful detail call returning a new origin with the same resource path records a work-local alias; it does not migrate every unrelated host in the source.
 
-## Direct resume after a domain change
+The host never invents or probes domains. Base-path changes are not automatically translated. If neither installed metadata nor a source response reveals a new address, existing extension behavior is preserved. Returning to an already retired runtime-discovered origin requires an explicit installed-state transition or the extension's own resolver; stale responses alone cannot establish that return.
 
-The host remembers numbered origins supplied by the installed extension metadata or its work responses, separately for each source and hostname family. It never probes or invents a numbered domain. A higher observed suffix can replace the origin of an old absolute work/episode URL when opening details or starting playback directly from home. Paths, query strings and fragments are retained, and relative or opaque identifiers are passed through unchanged. No new extension API or per-source configuration is required.
+## Direct resume
 
-Playback does not fetch a catalogue or refresh details just to resume. It reads the current episode mapping within the source queue and uses the known origin. If extraction with the changed URL throws or returns no videos, the original URL is tried once; the database URL is updated only after a usable result. Saved progress and episode IDs do not change. An extension that already rebases its own URLs continues to work.
+Home playback selects the known address without fetching another catalogue or forcing details to refresh. Only an absolute navigation URL with a known relationship can be rewritten; media, HLS, subtitle, image and authentication headers are not rewritten.
 
-This is not independent domain discovery: until installed metadata or a source response provides a new address, the host passes the stored address through. Returning to a lower numbered domain is not inferred automatically. Existing extension resolvers still handle those cases. The normal detailed-page cache policy remains unchanged.
+If extraction with the changed navigation URL fails or has no usable videos, the original URL is tried once. Failed candidate pairs are suppressed for five minutes (bounded memory; cleared on source invalidation). The saved episode URL changes only after usable extraction; original aliases are retained. Cancelled or superseded generations do not publish address updates or retry, and unused APK leases are released.
 
-Additional regression coverage starts a real host playback session against a synthetic extension without first refreshing details, both after a metadata update and after another work exposes the new origin. It checks the original episode ID, watchlist and resume position; failed/empty extraction falls back with a bounded call count. These tests do not contact external sites.
+## Persistence and compatibility
+
+`source_work_alias` / `source_episode_alias` store aliases and indexed resource keys. `source_address_state`, `source_address_sites` and `source_address_origins` record installed base state, namespaces and candidate selection. `source_identity_migrations` makes the additive initial backfill transactional and one-time. Old PR numeric-family tables are not treated as evidence of arbitrary domain migration. Uninstall explicitly clears source address state as well as aliases because source_entries rows can remain after removal.
+
+Added tables do not imply safe write compatibility with an older application. An old application does not know the aliases and may create duplicate entries after an address change. Do not declare release rollback safe without separately checking this. No production migration or downgrade is performed by the tests below.
+
+Unrecognized site restructuring, changed path/episode identifiers, repository/source-ID migration and historical duplicate consolidation are outside this change. Existing records remain intact. No zero-regression claim is made for all third-party extensions.
+
+## Validation
+
+Tests cover two-profile history preservation and backfill, installed numeric/TLD/name transitions, extension rollback, direct resume position, repeated fallback suppression, ambiguous records, base paths, unrelated hosts, opaque/relative identifiers, cancellation and unused leases. Standard Mangayomi JS runs unchanged through the real QuickJS runtime against a synthetic contract fixture; APK descriptor transitions exercise the existing bridge contract. Existing source/APK/cache regression tests remain applicable. External sites are not contacted by these tests. Two unmodified public extension snapshots also passed metadata/filter invocation with network access disabled; that is contract coverage, not live playback certification. Legacy URLs newer than static metadata are left intact during backfill until an actual transition establishes retirement.
+
+Upstream reference: [Mangayomi chapter synchronization](https://github.com/kodjodevf/mangayomi/blob/e479d28ac601594b6768ff343035ed6486babc17/lib/modules/manga/detail/providers/update_manga_detail_providers.dart) compares domainless URLs and additional chapter-recognition keys while keeping matched database IDs. MOA does not copy title-based merging or destructive deduplication.

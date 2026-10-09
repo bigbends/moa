@@ -7,14 +7,7 @@ import {Store} from '../src/db.js';
 import {Catalog} from '../src/catalog.js';
 import {Sources} from '../src/sources.js';
 import {RemotePlayback} from '../src/remote-playback.js';
-import {sourceIdentity,SourceIdentities} from '../src/source-identity.js';
-
-test('numbered source mirrors preserve paths, query and fragment but isolate unrelated hosts',()=>{
- const base='https://example12.test';
- assert.equal(sourceIdentity('https://example13.test/work/7?q=1#ep2',base),sourceIdentity('/work/7?q=1#ep2',base));
- for(const other of ['https://foreign.test/work/7?q=1#ep2','/work/7?q=2#ep2','/work/7?q=1#ep3','https://example13.test:8443/work/7?q=1#ep2'])assert.notEqual(sourceIdentity(other,base),sourceIdentity('/work/7?q=1#ep2',base));
- assert.match(sourceIdentity('{"url":"/work"}',base),/opaque/);
-});
+import {SourceIdentities} from '../src/source-identity.js';
 
 test('existing work/episode IDs and two profiles survive mirror change and database reopen',async()=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'source-identity-'));let db=new Store(dir);let sources:Sources|undefined;
@@ -31,7 +24,7 @@ test('existing work/episode IDs and two profiles survive mirror change and datab
   db.run('INSERT INTO progress VALUES(?,?,?,?,?,?)','p2',ep,900,1200,0,'2026');
   db.run('INSERT INTO watchlist VALUES(?,?,?)','p1',first,'2026');
   // Simulate upgrading an old database with no identity indexes.
-  await sources.close();db.db.exec('DROP TABLE source_work_identity;DROP TABLE source_episode_identity');db.close();
+  await sources.close();db.db.exec('DROP TABLE source_work_alias;DROP TABLE source_episode_alias;DELETE FROM source_identity_migrations');db.close();
   db=new Store(dir);catalog=new Catalog(db);sources=new Sources(db,catalog,runtime);
   origin='https://example13.test';sources.invalidate('s');
   assert.equal((await sources.browse('s','p1')).items[0].id,first);
@@ -108,11 +101,14 @@ test('domain fallback preserves old-only extensions and never rewrites opaque, r
   const ep=db.get('SELECT id FROM episodes WHERE media_id=?',work)!.id;
   db.run('UPDATE source_entries SET installed_entry=? WHERE id=?',JSON.stringify({...entry,baseUrl:moved}),'s');
   for(fail of ['throw','empty','both'] as const){
-   urls.length=0;
+   sources.invalidate('s');urls.length=0;
    if(fail==='both')await assert.rejects(sources.videos(ep),/fixture-unsupported-origin/);else assert.equal((await sources.videos(ep)).length,1);
    assert.deepEqual(urls,[moved+'/watch?x=%2f#p',old+'/watch?x=%2f#p']);
    assert.equal(sources.remoteEpisode(ep)!.url,old+'/watch?x=%2f#p');
   }
+  fail='throw';sources.invalidate('s');urls.length=0;
+  await sources.videos(ep);await sources.videos(ep);
+  assert.deepEqual(urls,[moved+'/watch?x=%2f#p',old+'/watch?x=%2f#p',old+'/watch?x=%2f#p']);
   const identities=new SourceIdentities(db);
   for(const value of ['/watch','episode-12','{"url":"/watch"}','https://foreign12.test/watch','https://example12.test:8443/watch'])assert.equal(identities.navigationUrl('s',value,moved),value);
   assert.equal(identities.navigationUrl('s',old+'/watch?x=%2f#p',moved),moved+'/watch?x=%2f#p');
