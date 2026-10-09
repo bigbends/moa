@@ -59,6 +59,7 @@ try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   await context.addInitScript(id => { if (window !== top) return; localStorage.setItem('moa.profile', id); localStorage.setItem('moa.fullscreenOnPlay', '0'); localStorage.setItem('moa.remoteMode', 'off'); }, profile.id);
   const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (['warning', 'error'].includes(message.type()) && /Encountered two children with the same key|unique [\"']?key[\"']? prop/.test(message.text())) errors.push(message.text()); });
   page.on('dialog', dialog => { errors.push(`Unexpected browser dialog: ${dialog.type()}`); void dialog.dismiss(); });
   const base = web.resolvedUrls.local[0];
   await page.goto(base + 'plugins');

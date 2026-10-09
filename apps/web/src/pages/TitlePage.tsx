@@ -250,7 +250,7 @@ export function TitlePage() {
       </section>
 
       <div className="title-body">
-        <InlinePlugins key={m.id} placement="detail" />
+        <InlinePlugins key={`plugins:${m.id}`} placement="detail" />
         <TitleSources key={m.id} id={m.id} title={m.title}/>
         {!isMovie && <Episodes media={m} />}
         {!!m.people?.length && <PeopleRow people={m.people} />}
