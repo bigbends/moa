@@ -146,7 +146,7 @@ test('rejected APK formats release their lease; accepted mixed results keep the 
   const source:any={
     remoteEpisode:()=>({source_id:'s',url:'episode'}),
     serial:(_id:string,task:()=>Promise<unknown>)=>task(),
-    call:async()=>videos,
+    navigationCall:async()=>({result:videos,url:'episode',current:()=>{}}),
     apk:{release:(lease:string)=>{released.push(lease);}},
   };
   await assert.rejects(Sources.prototype.videos.call(source,'e'),/unsupported-stream-format/);
