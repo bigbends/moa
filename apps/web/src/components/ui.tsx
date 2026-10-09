@@ -152,6 +152,10 @@ export function ScrollLoader({ hasMore, loading, failed, onLoad }: { hasMore: bo
   return hasMore ? <div className="source-more" ref={more} role="status" aria-live="polite">{loading && <><Spinner size={20} /><span>불러오는 중…</span></>}</div> : null;
 }
 
+export function Toggle({ checked, onChange, label, disabled }: { checked: boolean; onChange: (value: boolean) => void; label: string; disabled?: boolean }) {
+  return <button role="switch" aria-checked={checked} aria-label={label} disabled={disabled} className={cx("switch", checked && "is-on")} onClick={() => onChange(!checked)}><i /></button>;
+}
+
 export function ProgressBar({ ratio, className }: { ratio: number; className?: string }) {
   return <span className={cx("progress", className)} aria-hidden="true"><i style={{ width: `${Math.max(2, Math.min(100, ratio * 100))}%` }} /></span>;
 }

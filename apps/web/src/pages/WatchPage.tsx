@@ -66,7 +66,7 @@ function useSession(episodeId: string, startOverride: number | null) {
       created = result;
       if (cancelled) await retirePlayback(result.sessionId, result.runtimeDependent);
       else setSession(result);
-    }).catch(e => { if (!cancelled) setError(e instanceof ApiError && e.code === "permission-denied" ? "영상 보기 권한이 없어요. 관리자에게 문의해 주세요." : e instanceof ApiError && e.code === "kids-restricted" ? KIDS_RESTRICTED : e instanceof ApiError && e.code === "apk_playback_capacity" ? "다른 기기에서 재생 중입니다. 재생이 끝난 뒤 다시 시도해 주세요." : "재생을 준비하지 못했습니다."); });
+    }).catch(e => { if (!cancelled) setError(e instanceof ApiError && e.code === "permission-denied" ? "영상 보기 권한이 없어요. 관리자에게 문의해 주세요." : e instanceof ApiError && e.code === "kids-restricted" ? KIDS_RESTRICTED : e instanceof ApiError && e.code === "apk_playback_capacity" ? "다른 기기에서 재생 중입니다. 재생이 끝난 뒤 다시 시도해 주세요." : e instanceof ApiError && e.code === "no-streams" ? "소스에서 재생할 영상을 찾지 못했습니다." : e instanceof ApiError && ["unsupported-stream-format", "unsupported-inline-hls"].includes(e.code) ? "소스가 반환한 영상 형식을 지원하지 않습니다." : "재생을 준비하지 못했습니다."); });
     return () => {
       cancelled = true;
       if (created) void retirePlayback(created.sessionId, created.runtimeDependent);
@@ -202,13 +202,17 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
   const titleLine = session ? [session.mediaTitle, session.episodeLabel && `${session.episodeLabel}${session.episodeTitle ? ` ${episodeTitle(session.episodeTitle)}` : ""}`].filter(Boolean) : [];
 
   /* ---------- progress ---------- */
-  const saveProgress = useCallback((keepalive = false) => {
-    const v = video.current;
+  const saveProgress = useCallback((keepalive = false, v = video.current) => {
     const position = castProgress.current?.position ?? v?.currentTime, duration = castProgress.current?.duration ?? v?.duration;
     if (!session || session.live || position === undefined || !Number.isFinite(duration) || !duration || position < 1) return;
     lastSaved.current = position;
-    void api("/progress", { method: "POST", body: { episodeId: session.episodeId, position, duration }, keepalive }).catch(() => {});
-  }, [session]);
+    void api("/progress", { method: "POST", body: { episodeId: session.episodeId, position, duration }, keepalive }).then(() => {
+      // Periodic saves mark caches stale; final saves also refresh screens already mounted after exit.
+      void client.invalidateQueries({ queryKey: ["home"], refetchType: keepalive ? "active" : "none" });
+      void client.invalidateQueries({ queryKey: ["history"], refetchType: keepalive ? "active" : "none" });
+      void client.invalidateQueries({ queryKey: ["media", session.mediaId], refetchType: keepalive ? "active" : "none" });
+    }).catch(() => {});
+  }, [session, client]);
 
   /* ---------- attach ---------- */
   useEffect(() => {
@@ -253,13 +257,11 @@ function WatchPlayer({ episodeId, fullscreenHost, pip: documentPip }: { episodeI
     return () => {
       disposed = true;
       failPlayback.current = ()=>{};
-      saveProgress(true);
+      saveProgress(true, v);
       engine.current?.destroy();
       engine.current = null;
       subs.current?.destroy();
       subs.current = null;
-      void client.invalidateQueries({ queryKey: ["home"] });
-      void client.invalidateQueries({ queryKey: ["media", session.mediaId] });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);

@@ -18,7 +18,7 @@ import { SubtitleAdvancedSettings } from "../components/SubtitleAdvancedSettings
 import { translationModeOf, useTranslationConfig, type TranslationMode } from "../api/translation";
 import { keys, useFolders, useMe, useScanStatus, useSettings, useSaveSettings } from "../api/queries";
 import { AccountSection } from "./AccountsPage";
-import { Button, ConfirmDialog, EmptyState, IconButton, Select, Skeleton, Spinner } from "../components/ui";
+import { Button, ConfirmDialog, EmptyState, IconButton, Select, Skeleton, Spinner, Toggle } from "../components/ui";
 import { api, hasLoginGate } from "../lib/api";
 import { TYPE_LABEL, cx } from "../lib/format";
 
@@ -143,10 +143,6 @@ export function LibraryPage() {
   );
 }
 
-function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (value: boolean) => void; label: string }) {
-  return <button role="switch" aria-checked={checked} aria-label={label} className={cx("switch", checked && "is-on")} onClick={() => onChange(!checked)}><i /></button>;
-}
-
 const MODE_TEXT: Record<TranslationMode, string> = {
   manual: "재생 중 자막 메뉴에서 ‘한국어로 번역’을 누를 때만 번역해요.",
   ask: "번역할 자막을 찾아 물어봐요. 영상에 외국어 자막이 없으면 외부 사이트 Jimaku에서 일본어 자막을 찾아요. ‘번역하기’를 누를 때만 자막 내용과 작품 정보가 설정한 AI 서비스로 전송되고 사용료가 발생해요.",
@@ -172,6 +168,7 @@ export function SettingsPage() {
   const [device, setDevice] = useState(devicePrefs);
   const setPref = <K extends keyof DevicePrefs>(key: K, value: DevicePrefs[K]) => { setDevicePref(key, value); setDevice(old => ({ ...old, [key]: value })); };
   const settings = useSettings();
+  const client = useQueryClient();
   const admin = useMe().data?.role === "admin";
   const translation = useTranslationConfig().data;
   const { pathname, hash } = useLocation();
@@ -211,6 +208,7 @@ export function SettingsPage() {
         <div className="settings-card">
           {row("다음 화 자동 재생", "에피소드가 끝나면 다음 화를 이어서 재생합니다.", <Toggle label="다음 화 자동 재생" checked={s.autoplayNext} onChange={value => void save({ autoplayNext: value })} />)}
           {s.autoplayNext && row("자동 재생 대기 시간", "다음 화 카드가 나온 뒤 재생까지 기다리는 시간", select("autoplayDelay", [[3, "3초"], [5, "5초"], [10, "10초"], [15, "15초"]]))}
+          {row("시청 기록 작품별로 보기", "시청 기록에서 작품마다 가장 최근 회차만 보여줘요. 끄면 회차별로 모두 보여줘요.", <Toggle label="시청 기록 작품별로 보기" checked={s.groupHistory} onChange={value => void save({ groupHistory: value }).then(() => client.invalidateQueries({ queryKey: keys.history }))} />)}
           {row("기본 화질", "네트워크가 느리면 낮은 화질이 끊김이 적어요.", select("preferredQuality", [["auto", "자동"], ["1080", "1080p"], ["720", "720p"], ["480", "480p"]]))}
           {row("하드웨어 변환", "브라우저가 재생할 수 없는 영상을 서버 GPU로 변환합니다.", <Toggle label="하드웨어 변환" checked={s.hardwareTranscoding} onChange={value => void save({ hardwareTranscoding: value })} />)}
         </div>

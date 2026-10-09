@@ -155,6 +155,9 @@
 .search-error { color: var(--text-3); font-size: .9rem; }
 
 /* ---------- History ---------- */
+.history-grouping { display: inline-flex; align-items: center; gap: 10px; color: var(--text-2); font-size: .9rem; cursor: pointer; }
+.history-grouping:has(:disabled) { cursor: progress; opacity: .7; }
+.history-error { margin: 0 0 12px; color: var(--danger); font-size: .88rem; }
 .history-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .history-item { display: grid; grid-template-columns: clamp(120px, 16vw, 180px) minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 10px; border-radius: var(--radius-m); }
 .history-item:hover { background: var(--surface-1); }
