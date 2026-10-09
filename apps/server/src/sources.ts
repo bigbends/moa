@@ -424,14 +424,14 @@ export class Sources {
       for (const resolve of batch.urls.get(url)!) resolve(bytes);
     });
   }
-  private putItem(sourceId: string, item: SourceItem) {
+  private putItem(sourceId: string, item: SourceItem, knownId?: string) {
     const r = this.row(sourceId), entry: MangayomiEntry = JSON.parse(r.installed_entry);
     if (!item || !text(item.name) || !text(item.link, 16_384)) return null;
     // These extension navigation cards contain instructions rather than playable media.
     if (/(?:^|\/)__[^/]*(?:card|divider|guide)__\//.test(item.link)) return null;
     if (item.link.startsWith('{')) { try { if (JSON.parse(item.link).weekdayCard) return null; } catch {} }
     const exactId = 'remote-' + key(sourceId, item.link);
-    const id = this.db.get('SELECT id FROM media WHERE id=?',exactId) ? exactId : this.identities.findWork(sourceId,item.link,entry.baseUrl) || exactId;
+    const id = knownId ?? (this.db.get('SELECT id FROM media WHERE id=?',exactId) ? exactId : this.identities.findWork(sourceId,item.link,entry.baseUrl) || exactId);
     const old = this.db.get('SELECT title,type,metadata FROM media WHERE id=?', id);
     const meta = { ...JSON.parse(old?.metadata || '{}'), ...('adult' in item && typeof item.adult === 'boolean' ? { adult: item.adult } : {}), provider: { id: sourceId, name: entry.name, lang: entry.lang, kind: (entry as unknown as ApkEntry).format === 'aniyomi-apk' ? 'aniyomi-apk' : 'mangayomi-js' }, live: Boolean(r.live), ...(item.imageUrl ? { poster: this.image(sourceId, webUrl(item.imageUrl, entry.baseUrl), { Referer: entry.baseUrl, ...(item.imageHeaders || {}) }) } : {}), ...(item.description ? { overview: text(item.description, 20_000) } : {}), ...(Array.isArray(item.genre) ? { genres: item.genre.filter(g => typeof g === 'string').slice(0, 50) } : {}) };
     let title = item.name.slice(0,500);
@@ -446,6 +446,23 @@ export class Sources {
     this.db.run('INSERT INTO source_media(media_id,source_id,url) VALUES(?,?,?) ON CONFLICT(media_id) DO UPDATE SET url=excluded.url', id, sourceId, item.link);
     this.identities.work(sourceId,id,item.link,entry.baseUrl);
     return id;
+  }
+  private async navigationCall(id: string, action: 'detail'|'videos', url: string, params: Record<string,unknown> = {}) {
+    const row=this.row(id), entry=JSON.parse(row.installed_entry || row.entry);
+    const resolved=this.identities.navigationUrl(id,url,entry.baseUrl);
+    const field=action==='detail'?'workUrl':'episodeUrl';
+    const invoke=(value:string)=>action==='detail'
+      ? this.readCall(id,action,{...params,[field]:value})
+      : this.call(id,action,{...params,[field]:value});
+    if(resolved!==url) {
+      try {
+        const result=await invoke(resolved);
+        const valid=action==='detail'?Array.isArray((result as SourceItem)?.chapters):Array.isArray(result) && result.length>0;
+        if(valid)return {result,url:resolved};
+        if(action==='videos' && (result as ExtractedVideos)?.apkLease)void this.apk.release((result as ExtractedVideos).apkLease);
+      } catch(error) { if(this.abort.signal.aborted)throw error; }
+    }
+    return {result:await invoke(url),url};
   }
   private async readCall(id:string,action:string,params:Record<string,unknown>={}) {
     const started=Date.now();
@@ -528,7 +545,9 @@ export class Sources {
       current();const row = this.row(mapping.source_id);
       const entry = JSON.parse(row.installed_entry || row.entry);
       const title=this.db.get('SELECT title FROM media WHERE id=?',id)?.title||'';
-      const raw = await this.readCall(mapping.source_id, 'detail', { workUrl: mapping.url,title }) as SourceItem;
+      const currentUrl=this.db.get('SELECT url FROM source_media WHERE media_id=?',id)!.url;
+      const navigation=await this.navigationCall(mapping.source_id,'detail',currentUrl,{title});
+      const raw = navigation.result as SourceItem;
       current();this.row(mapping.source_id);
       if (!raw || !Array.isArray(raw.chapters)) throw new ApiFailure(502, 'source-invalid-response');
       let chapters = raw.chapters.slice(0, 10_000).filter(e => text(e.url, 16_384));
@@ -541,7 +560,7 @@ export class Sources {
       const parsed = chapters.map((e, i) => { const n = /(?:^|\s|제)(\d+(?:\.\d+)?)\s*(?:화|회|편|話|화\b)|(?:episode|ep\.?|e)\s*(\d+)/i.exec(e.name); return { e, n: typeof (e as any).number === 'number' && (e as any).number >= 0 ? (e as any).number : n ? Number(n[1] || n[2]) : chapters.length - i }; });
       const media = this.db.get('SELECT * FROM media WHERE id=?', id)!;
       this.db.transaction(() => {
-        this.putItem(mapping.source_id, { ...raw, name: raw.name || media.title, link: mapping.url });
+        this.putItem(mapping.source_id, { ...raw, name: raw.name || media.title, link: navigation.url }, id);
         if (!row.live && chapters.length === 1 && /영화|movie|film|본편/i.test(mapping.url + ' ' + (raw.genre || []).join(' ') + ' ' + chapters[0].name)) this.db.run("UPDATE media SET type='movie' WHERE id=?", id);
         const observed = new Map<string,number>();
         for (const { e, n } of parsed) {
@@ -562,9 +581,11 @@ export class Sources {
   }
   remoteEpisode(episodeId: string) { return this.db.get('SELECT s.source_id,s.media_id,e.url FROM source_episodes e JOIN episodes ep ON ep.id=e.episode_id JOIN source_media s ON s.media_id=ep.media_id WHERE e.episode_id=?', episodeId); }
   async videos(episodeId: string) {
-    const mapping = this.remoteEpisode(episodeId); if (!mapping) throw new ApiFailure(404, 'episode-not-found');
-    return this.serial(mapping.source_id, async () => {
-      const videos = await this.call(mapping.source_id, 'videos', { episodeUrl: mapping.url }) as ExtractedVideos;
+    const source = this.remoteEpisode(episodeId); if (!source) throw new ApiFailure(404, 'episode-not-found');
+    return this.serial(source.source_id, async () => {
+      const mapping=this.remoteEpisode(episodeId); if(!mapping)throw new ApiFailure(404,'episode-not-found');
+      const navigation=await this.navigationCall(mapping.source_id,'videos',mapping.url);
+      const videos = navigation.result as ExtractedVideos;
       if (!Array.isArray(videos)) throw new ApiFailure(502, 'source-invalid-response');
       const filtered: ExtractedVideos = videos.filter(v => v && typeof v.url === 'string' && (v.url.startsWith('edl://') || webUrl(v.url, '') || isInlineHls(v.url))).slice(0, 32);
       if (videos.length && !filtered.length) {
@@ -572,6 +593,7 @@ export class Sources {
         if (videos.apkLease) void this.apk.release(videos.apkLease);
         throw new ApiFailure(502, 'unsupported-stream-format');
       }
+      if(filtered.length && navigation.url!==mapping.url)this.db.run('UPDATE source_episodes SET url=? WHERE episode_id=? AND url=?',navigation.url,episodeId,mapping.url);
       filtered.apkLease = videos.apkLease; return filtered;
     }, 'interactive');
   }
