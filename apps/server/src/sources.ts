@@ -1,3 +1,4 @@
+import { SourceIdentities } from './source-identity.js';
 import { SourceQueue, type SourceLane } from './source-queue.js';
 import { isInlineHls } from './inline-hls.js';
 import { SourceBrowser } from './source-browser.js';
@@ -33,6 +34,7 @@ export class Sources {
   private reads: SourceReadCache;
   readonly stats = new CacheStats();
   private details: DetailPolicy;
+  private identities: SourceIdentities;
   constructor(public db: Store, public catalog: Catalog, private runtime = invokeMangayomi, private fetchCode = fetchExtension, private fetchRegistry = fetchRepository, public apk = new ApkBridge(), private browser = new SourceBrowser()) {
     db.db.exec(`CREATE TABLE IF NOT EXISTS server_network(id INTEGER PRIMARY KEY CHECK(id=1),proxy TEXT NOT NULL,revision INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS source_entries(id TEXT PRIMARY KEY,repository TEXT NOT NULL,entry TEXT NOT NULL,installed_entry TEXT,code TEXT,sha256 TEXT,preferences TEXT NOT NULL DEFAULT '{}',enabled INTEGER NOT NULL DEFAULT 0,type TEXT NOT NULL DEFAULT 'series',live INTEGER NOT NULL DEFAULT 0);
@@ -52,6 +54,7 @@ export class Sources {
     if(!db.all('PRAGMA table_info(source_repositories)').some(r=>r.name==='kind')) db.db.exec("ALTER TABLE source_repositories ADD COLUMN kind TEXT NOT NULL DEFAULT 'mangayomi-js'");
     this.reads = new SourceReadCache(db,this.abort.signal,Date.now,undefined,this.stats);
     this.details = new DetailPolicy(db);
+    this.identities = new SourceIdentities(db);
   }
   network() {
     const row = this.db.get('SELECT * FROM server_network WHERE id=1');
@@ -427,7 +430,9 @@ export class Sources {
     // These extension navigation cards contain instructions rather than playable media.
     if (/(?:^|\/)__[^/]*(?:card|divider|guide)__\//.test(item.link)) return null;
     if (item.link.startsWith('{')) { try { if (JSON.parse(item.link).weekdayCard) return null; } catch {} }
-    const id = 'remote-' + key(sourceId, item.link), old = this.db.get('SELECT title,type,metadata FROM media WHERE id=?', id);
+    const exactId = 'remote-' + key(sourceId, item.link);
+    const id = this.db.get('SELECT id FROM media WHERE id=?',exactId) ? exactId : this.identities.findWork(sourceId,item.link,entry.baseUrl) || exactId;
+    const old = this.db.get('SELECT title,type,metadata FROM media WHERE id=?', id);
     const meta = { ...JSON.parse(old?.metadata || '{}'), ...('adult' in item && typeof item.adult === 'boolean' ? { adult: item.adult } : {}), provider: { id: sourceId, name: entry.name, lang: entry.lang, kind: (entry as unknown as ApkEntry).format === 'aniyomi-apk' ? 'aniyomi-apk' : 'mangayomi-js' }, live: Boolean(r.live), ...(item.imageUrl ? { poster: this.image(sourceId, webUrl(item.imageUrl, entry.baseUrl), { Referer: entry.baseUrl, ...(item.imageHeaders || {}) }) } : {}), ...(item.description ? { overview: text(item.description, 20_000) } : {}), ...(Array.isArray(item.genre) ? { genres: item.genre.filter(g => typeof g === 'string').slice(0, 50) } : {}) };
     let title = item.name.slice(0,500);
     const shortened = /(?:\.{3}|…)\s*$/.test(title);
@@ -438,7 +443,8 @@ export class Sources {
     const inferred = /^(anime|animation)$/.test(category || '') ? 'anime' : /^movies?$/.test(category || '') ? 'movie' : /^(dramas?|tv|series)$/.test(category || '') ? 'series' : undefined;
     const type = ['anime','movie','series'].includes(item.type || '') ? item.type : inferred || old?.type || r.type;
     this.db.run(`INSERT INTO media VALUES(?,NULL,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,type=excluded.type,metadata=excluded.metadata`, id, title, type, JSON.stringify(meta), now());
-    this.db.run('INSERT OR IGNORE INTO source_media(media_id,source_id,url) VALUES(?,?,?)', id, sourceId, item.link);
+    this.db.run('INSERT INTO source_media(media_id,source_id,url) VALUES(?,?,?) ON CONFLICT(media_id) DO UPDATE SET url=excluded.url', id, sourceId, item.link);
+    this.identities.work(sourceId,id,item.link,entry.baseUrl);
     return id;
   }
   private async readCall(id:string,action:string,params:Record<string,unknown>={}) {
@@ -520,6 +526,7 @@ export class Sources {
     if(mapping.detail_at>0)this.reads.prime(mapping.source_id,cacheKey,true,mapping.detail_at);
     return this.reads.read(mapping.source_id,cacheKey,this.details.policy(id),current=>this.serial(mapping.source_id, async () => {
       current();const row = this.row(mapping.source_id);
+      const entry = JSON.parse(row.installed_entry || row.entry);
       const title=this.db.get('SELECT title FROM media WHERE id=?',id)?.title||'';
       const raw = await this.readCall(mapping.source_id, 'detail', { workUrl: mapping.url,title }) as SourceItem;
       current();this.row(mapping.source_id);
@@ -536,14 +543,18 @@ export class Sources {
       this.db.transaction(() => {
         this.putItem(mapping.source_id, { ...raw, name: raw.name || media.title, link: mapping.url });
         if (!row.live && chapters.length === 1 && /영화|movie|film|본편/i.test(mapping.url + ' ' + (raw.genre || []).join(' ') + ' ' + chapters[0].name)) this.db.run("UPDATE media SET type='movie' WHERE id=?", id);
+        const observed = new Map<string,number>();
         for (const { e, n } of parsed) {
-          const eid = 'remote-' + key(id, e.url);
+          const exactId = 'remote-' + key(id, e.url);
+          const eid = this.db.get('SELECT id FROM episodes WHERE id=?',exactId) ? exactId : this.identities.findEpisode(id,e.url,entry.baseUrl) || exactId;
           this.db.run(`INSERT INTO episodes VALUES(?,?,?,?,?,0,NULL) ON CONFLICT(id) DO UPDATE SET season=excluded.season,number=excluded.number,title=excluded.title`, eid, id, parseSeason(raw.name || media.title) ?? 1, n, text(e.name) || `${n}화`);
           this.db.run('INSERT OR REPLACE INTO source_episodes VALUES(?,?)', eid, e.url);
+          this.identities.episode(id,eid,e.url,entry.baseUrl);
+          observed.set(eid,n);
         }
         // Mangayomi JSON completed=1; Aniyomi SAnime completed=2.
         const apk = JSON.parse(row.installed_entry || row.entry).format === 'aniyomi-apk';
-        this.details.observe(id, parsed.map(({e,n})=>({id:'remote-'+key(id,e.url),number:n})), raw.status === (apk ? 2 : 1));
+        this.details.observe(id, [...observed].map(([episodeId,number])=>({id:episodeId,number})), raw.status === (apk ? 2 : 1));
         this.db.run('UPDATE source_media SET detail_at=? WHERE media_id=?', Date.now(), id);
       });
       return true;
